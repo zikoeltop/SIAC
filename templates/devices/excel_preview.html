@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% load device_extras %}
+{% block content %}
+<div class="card">
+  <h2>Preview ملف الأجهزة</h2>
+  <p>راجع البيانات قبل اعتمادها. قاعدة البيانات الحالية لن تتغير إلا بعد الضغط على <b>اعتماد الملف</b>.</p>
+
+  <div class="notice">
+    <b>إجمالي الصفوف في Excel:</b> {{ pending.total_rows }} &nbsp; | &nbsp;
+    <b>صفوف صالحة بعد التنظيف:</b> {{ pending.valid_rows }} &nbsp; | &nbsp;
+    <b>Serial مكرر سيتم تجاهله:</b> {{ pending.duplicate_rows }} &nbsp; | &nbsp;
+    <b>الأجهزة الحالية:</b> {{ current_count }}
+  </div>
+
+  {% if pending.duplicate_rows %}
+    <div class="error">يوجد {{ pending.duplicate_rows }} صف مكرر في Serial Number. سيتم الاحتفاظ بأول ظهور لكل Serial ولن يفشل الاستيراد بسبب التكرار.</div>
+  {% endif %}
+
+  <h3>الأعمدة</h3>
+  <p>{{ pending.columns|join:", " }}</p>
+
+  <h3>عينة من البيانات — أول 25 صفاً</h3>
+  <div style="overflow:auto; max-width:100%;">
+    <table style="width:100%; border-collapse:collapse; min-width:900px;">
+      <thead><tr>{% for col in pending.columns %}<th style="border:1px solid #ccc;padding:7px;background:#eee;white-space:nowrap;">{{ col }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for row in pending.preview_rows %}
+        <tr>{% for col in pending.columns %}<td style="border:1px solid #ddd;padding:7px;white-space:nowrap;">{{ row|get_item:col }}</td>{% endfor %}</tr>
+      {% empty %}
+        <tr><td colspan="20">لا توجد بيانات صالحة للعرض.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:20px;display:flex;gap:10px;">
+    <a href="{% url 'manage_excel' %}"><button type="button">إلغاء / رفع ملف آخر</button></a>
+    <form method="post" onsubmit="return confirm('هل أنت متأكد من اعتماد هذا الملف واستبدال بيانات الأجهزة الحالية؟');">
+      {% csrf_token %}
+      <button type="submit">اعتماد الملف واستبدال البيانات</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

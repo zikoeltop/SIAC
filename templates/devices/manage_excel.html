@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card">
+  <h2>إدارة ملف الأجهزة</h2>
+  <p>رفع الملف هنا لا يغيّر قاعدة البيانات مباشرة. سيتم أولاً عرض Preview ثم يمكنك اعتماد الملف.</p>
+  {% if current %}<div class="notice">الملف الحالي: {{ current.file.name }} — {{ current.rows_imported }} جهاز — {{ current.uploaded_at }}</div>{% endif %}
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">عرض Preview</button>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,4 @@
+{% load static %}
+<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SIAC IT System</title><link rel="stylesheet" href="{% static 'css/style.css' %}"></head><body>
+<nav><div class="brand">SIAC IT</div><div class="navlinks">{% if user.is_authenticated %}<a href="{% url 'dashboard' %}">الرئيسية</a><a href="{% url 'search_device' %}">بحث جهاز</a>{% if user.is_admin_role %}<a href="{% url 'manage_excel' %}">إدارة Excel</a><a href="{% url 'user_list' %}">المستخدمون</a><a href="{% url 'audit_logs' %}">سجل العمليات</a>{% endif %}<a href="{% url 'password_change' %}">تغيير كلمة المرور</a><a href="{% url 'logout' %}">خروج</a>{% endif %}</div></nav>
+<main>{% for message in messages %}<div class="msg {{ message.tags }}">{{ message }}</div>{% endfor %}{% block content %}{% endblock %}</main></body></html>

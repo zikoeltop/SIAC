@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<div class="card login"><h1>تسجيل الدخول</h1><p>إدارة الحاسب الآلي ونظم المعلومات - SIAC</p><form method="post">{% csrf_token %}{{ form.non_field_errors }}<label>اسم المستخدم</label>{{ form.username }}<label>كلمة المرور</label>{{ form.password }}<button>دخول</button></form></div>{% endblock %}

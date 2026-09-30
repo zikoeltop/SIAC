@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<div class="card"><h2>{{ title }}</h2><form method="post">{% csrf_token %}{{ form.as_p }}{% if form.instance.pk %}<p>لتغيير كلمة المرور استخدم صفحة تغيير كلمة المرور الخاصة بالمستخدم.</p>{% endif %}<button>حفظ</button></form></div>{% endblock %}
