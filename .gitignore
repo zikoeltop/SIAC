@@ -1,7 +1,34 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Django
 db.sqlite3
+*.sqlite3
+
+# Environment / Secrets
 .env
+
+# User uploaded files
 media/
+uploads/
+
+# Static collected files
 staticfiles/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
