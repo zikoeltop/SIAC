@@ -19,7 +19,7 @@ ARABIC_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]')
 def clean_text(value):
     if value is None:
         return ''
-    return str(value).replace('\r\n', '\n').replace('\r', '\n')
+    return str(value).replace('\\r\\n', '\\n').replace('\\r', '\\n')
 
 
 def has_arabic(text):
@@ -27,113 +27,116 @@ def has_arabic(text):
 
 
 def visual_text(value):
-    """Return text safe for ReportLab, preserving Arabic and Latin/number content.
-
-    Pure LTR content is left untouched. Text containing Arabic is reshaped and
-    passed through the bidi algorithm. HTML/XML characters are escaped only
-    after bidi processing so ReportLab's Paragraph parser cannot eat data such
-    as '&', '<', or '>'.
-    """
+    """Prepare text for ReportLab while preserving Arabic + English/numbers."""
     text = clean_text(value)
     if not text:
         return ''
-
     if has_arabic(text):
+        # Bidi is applied only to the value itself. English labels are kept
+        # outside this function so mixed rows cannot swallow or reorder them.
         text = get_display(reshape(text), base_dir='R')
-
-    return html.escape(text, quote=False).replace('\n', '<br/>')
-
-
-def labeled_value(label, value):
-    """Keep an English/LTR label intact while rendering the value safely."""
-    return f'{html.escape(clean_text(label), quote=False)} {visual_text(value)}'
+    return html.escape(text, quote=False).replace('\\n', '<br/>')
 
 
 def register_font():
     candidates = [
         BASE_DIR / 'static' / 'fonts' / 'NotoSansArabic-Regular.ttf',
-        Path('C:/Windows/Fonts/arial.ttf'),
         Path('/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf'),
         Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'),
         Path('/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf'),
+        Path('C:/Windows/Fonts/arial.ttf'),
     ]
-
     for path in candidates:
         if path.exists():
             try:
-                font_name = 'SIACArabic'
-                if font_name not in pdfmetrics.getRegisteredFontNames():
-                    pdfmetrics.registerFont(TTFont(font_name, str(path)))
-                return font_name
+                if 'SIACArabic' not in pdfmetrics.getRegisteredFontNames():
+                    pdfmetrics.registerFont(TTFont('SIACArabic', str(path)))
+                return 'SIACArabic'
             except Exception:
                 continue
+    raise RuntimeError('Arabic PDF font was not found.')
 
-    raise RuntimeError(
-        'Arabic PDF font was not found. Noto Sans Arabic should be downloaded during the build.'
+
+def _paragraph(value, style):
+    return Paragraph(visual_text(value), style)
+
+
+def _field_block(label, value, font, value_size=10):
+    """Return a self-contained label/value block so every field is always rendered."""
+    label_style = ParagraphStyle(
+        f'label_{label}', fontName=font, fontSize=value_size, leading=value_size + 3,
+        alignment=2, spaceAfter=1,
     )
+    value_style = ParagraphStyle(
+        f'value_{label}', fontName=font, fontSize=value_size, leading=value_size + 3,
+        alignment=2,
+    )
+    return [
+        Paragraph(html.escape(label, quote=False), label_style),
+        Paragraph(visual_text(value) if clean_text(value) else ' ', value_style),
+    ]
 
 
 def build_pdf(device):
     font = register_font()
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
-        buf,
-        pagesize=letter,
-        rightMargin=25,
-        leftMargin=25,
-        topMargin=25,
-        bottomMargin=25,
+        buf, pagesize=letter,
+        rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25,
     )
 
-    right = ParagraphStyle(
-        'right', fontName=font, fontSize=10, alignment=2, leading=13
-    )
-    center = ParagraphStyle(
-        'center', fontName=font, fontSize=16, alignment=1, spaceAfter=8
-    )
-    heading = ParagraphStyle(
-        'heading', fontName=font, fontSize=10, alignment=2, spaceAfter=2
-    )
-
-    def para(text, style=right):
-        return Paragraph(visual_text(text), style)
+    right = ParagraphStyle('right', fontName=font, fontSize=10, alignment=2, leading=13)
+    center = ParagraphStyle('center', fontName=font, fontSize=16, alignment=1, spaceAfter=8, leading=20)
+    heading = ParagraphStyle('heading', fontName=font, fontSize=10, alignment=2, spaceAfter=2, leading=13)
+    field_label = ParagraphStyle('field_label', fontName=font, fontSize=9, alignment=2, leading=12)
+    field_value = ParagraphStyle('field_value', fontName=font, fontSize=10, alignment=2, leading=13)
 
     story = [
-        para('الشركة الهندسية للصناعات والتشييد (سياك)'),
-        para('إدارة الحاسب الآلي ونظم المعلومات'),
+        _paragraph('الشركة الهندسية للصناعات والتشييد (سياك)', right),
+        _paragraph('إدارة الحاسب الآلي ونظم المعلومات', right),
         Spacer(1, 4),
-        para('إجراءات فحص جهاز', center),
+        _paragraph('إجراءات فحص جهاز', center),
     ]
 
-    # Keep bilingual labels readable while preserving the exact stored value.
+    # Explicit 4-column layout: English label is isolated from the value.
+    # This prevents bidi processing of a mixed Arabic/English string from
+    # hiding labels or values.
     fields = [
         [
-            Paragraph(labeled_value('User Name :', device.user_name), right),
-            Paragraph(labeled_value('Project :', device.project), right),
+            Paragraph('User Name :', field_label),
+            Paragraph(visual_text(device.user_name) or ' ', field_value),
+            Paragraph('Project :', field_label),
+            Paragraph(visual_text(device.project) or ' ', field_value),
         ],
         [
-            Paragraph(labeled_value('Serial Number :', device.serial_number), right),
-            Paragraph(labeled_value('Model :', device.model), right),
+            Paragraph('Serial Number :', field_label),
+            Paragraph(visual_text(device.serial_number) or ' ', field_value),
+            Paragraph('Model :', field_label),
+            Paragraph(visual_text(device.model) or ' ', field_value),
         ],
         [
-            Paragraph('', right),
-            Paragraph(labeled_value('Pc Name :', device.computer_name), right),
+            Paragraph('', field_label),
+            Paragraph('', field_value),
+            Paragraph('Pc Name :', field_label),
+            Paragraph(visual_text(device.computer_name) or ' ', field_value),
         ],
     ]
 
-    t = Table(fields, colWidths=[270, 270])
+    t = Table(fields, colWidths=[78, 192, 68, 202], hAlign='RIGHT')
     t.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 2),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
         ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
     ]))
-    story += [t, Spacer(1, 8), para('إجراءات فحص جهاز:', heading)]
-    story += [Spacer(1, 3), para('HDD :', heading)]
+    story += [t, Spacer(1, 8), _paragraph('إجراءات فحص جهاز:', heading)]
+    story += [Spacer(1, 3), _paragraph('HDD :', heading)]
 
     box = Table(
-        [[para(device.hdd)], [para('')]],
-        colWidths=[540],
-        rowHeights=[20, 20],
+        [[_paragraph(device.hdd, right)], [_paragraph('', right)]],
+        colWidths=[540], rowHeights=[20, 20],
     )
     box.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
@@ -143,13 +146,10 @@ def build_pdf(device):
 
     ram_proc = [
         [
-            Paragraph(labeled_value('RAM : [', f'{device.ram} ]'), heading),
-            Paragraph(labeled_value('processor : [', f'{device.processor} ]'), right),
+            _paragraph(f'RAM : [ {device.ram} ]', heading),
+            _paragraph(f'processor : [ {device.processor} ]', right),
         ]
-    ] + [
-        [para(''), para('')]
-        for _ in range(3)
-    ]
+    ] + [[_paragraph('', right), _paragraph('', right)] for _ in range(3)]
 
     box2 = Table(ram_proc, colWidths=[270, 270], rowHeights=[20, 20, 20, 20])
     box2.setStyle(TableStyle([
@@ -165,11 +165,10 @@ def build_pdf(device):
         '-6 نوع وسريال الطابعه :',
         '-7 ملاحظات:',
     ]:
-        story += [para(title, heading)]
+        story += [_paragraph(title, heading)]
         b = Table(
-            [[para('')], [para('')]],
-            colWidths=[540],
-            rowHeights=[20, 20],
+            [[_paragraph('', right)], [_paragraph('', right)]],
+            colWidths=[540], rowHeights=[20, 20],
         )
         b.setStyle(TableStyle([
             ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
@@ -179,12 +178,12 @@ def build_pdf(device):
 
     footer = [
         [
-            para('اسم مسئول الدعم الفنى : ......................................'),
-            para('تاريخ التقرير : ................................................'),
+            _paragraph('اسم مسئول الدعم الفنى : ......................................', right),
+            _paragraph('تاريخ التقرير : ................................................', right),
         ],
         [
-            para(''),
-            para('توقيع المستخدم : ......................................'),
+            _paragraph('', right),
+            _paragraph('توقيع المستخدم : ......................................', right),
         ],
     ]
     ft = Table(footer, colWidths=[270, 270])
