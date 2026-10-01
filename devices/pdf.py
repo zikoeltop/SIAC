@@ -1,4 +1,6 @@
+import html
 import io
+import re
 from pathlib import Path
 
 from reportlab.lib import colors
@@ -11,17 +13,43 @@ from arabic_reshaper import reshape
 from bidi.algorithm import get_display
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+ARABIC_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]')
 
 
-def fix_ar(text):
-    """Shape Arabic and apply RTL display order for ReportLab."""
-    if text is None:
+def clean_text(value):
+    if value is None:
         return ''
-    return get_display(reshape(str(text)))
+    return str(value).replace('\r\n', '\n').replace('\r', '\n')
+
+
+def has_arabic(text):
+    return bool(ARABIC_RE.search(text))
+
+
+def visual_text(value):
+    """Return text safe for ReportLab, preserving Arabic and Latin/number content.
+
+    Pure LTR content is left untouched. Text containing Arabic is reshaped and
+    passed through the bidi algorithm. HTML/XML characters are escaped only
+    after bidi processing so ReportLab's Paragraph parser cannot eat data such
+    as '&', '<', or '>'.
+    """
+    text = clean_text(value)
+    if not text:
+        return ''
+
+    if has_arabic(text):
+        text = get_display(reshape(text), base_dir='R')
+
+    return html.escape(text, quote=False).replace('\n', '<br/>')
+
+
+def labeled_value(label, value):
+    """Keep an English/LTR label intact while rendering the value safely."""
+    return f'{html.escape(clean_text(label), quote=False)} {visual_text(value)}'
 
 
 def register_font():
-    """Register a font with reliable Arabic coverage for Linux and Windows."""
     candidates = [
         BASE_DIR / 'static' / 'fonts' / 'NotoSansArabic-Regular.ttf',
         Path('C:/Windows/Fonts/arial.ttf'),
@@ -68,7 +96,7 @@ def build_pdf(device):
     )
 
     def para(text, style=right):
-        return Paragraph(fix_ar('' if text is None else text), style)
+        return Paragraph(visual_text(text), style)
 
     story = [
         para('الشركة الهندسية للصناعات والتشييد (سياك)'),
@@ -77,18 +105,19 @@ def build_pdf(device):
         para('إجراءات فحص جهاز', center),
     ]
 
+    # Keep bilingual labels readable while preserving the exact stored value.
     fields = [
         [
-            para(f'User Name : {device.user_name}'),
-            para(f'Project : {device.project}'),
+            Paragraph(labeled_value('User Name :', device.user_name), right),
+            Paragraph(labeled_value('Project :', device.project), right),
         ],
         [
-            para(f'Serial Number : {device.serial_number}'),
-            para(f'Model : {device.model}'),
+            Paragraph(labeled_value('Serial Number :', device.serial_number), right),
+            Paragraph(labeled_value('Model :', device.model), right),
         ],
         [
-            para(''),
-            para(f'Pc Name : {device.computer_name}'),
+            Paragraph('', right),
+            Paragraph(labeled_value('Pc Name :', device.computer_name), right),
         ],
     ]
 
@@ -114,8 +143,8 @@ def build_pdf(device):
 
     ram_proc = [
         [
-            para(f'RAM : [ {device.ram} ]', heading),
-            para(f'processor : [ {device.processor} ]'),
+            Paragraph(labeled_value('RAM : [', f'{device.ram} ]'), heading),
+            Paragraph(labeled_value('processor : [', f'{device.processor} ]'), right),
         ]
     ] + [
         [para(''), para('')]
