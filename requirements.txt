@@ -4,3 +4,7 @@ openpyxl>=3.1
 reportlab>=4.2
 arabic-reshaper>=3.0
 python-bidi>=0.6
+gunicorn>=23,<24
+dj-database-url>=2.3,<3
+psycopg2-binary>=2.9,<3
+whitenoise>=6.9,<7
