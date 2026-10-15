@@ -5,6 +5,7 @@ import io
 import json
 import math
 import re
+import uuid
 from datetime import date, datetime
 from typing import Any
 
@@ -12,7 +13,7 @@ import pandas as pd
 from django.db import transaction
 from django.utils import timezone
 
-from .models import Asset, Employee
+from .models import Asset, AssetMovement, Employee
 
 
 SHEET_CONFIGS = {
@@ -247,7 +248,7 @@ def preview_inventory_workbook(uploaded_file):
     }
 
 
-def import_inventory_workbook(uploaded_file):
+def import_inventory_workbook(uploaded_file, actor=None):
     """Import the inventory workbook without deleting manual records or unrelated data.
 
     Employees are upserted by HR Code. Imported assets are upserted by source sheet and
@@ -291,6 +292,7 @@ def import_inventory_workbook(uploaded_file):
         raise ValueError('لم يتم العثور على موظفين لديهم Employee Code وEmployee Name.')
 
     with transaction.atomic():
+        import_changes = []
         employee_objects = [Employee(hr_code=code, **defaults) for code, defaults in employee_map.items()]
         Employee.objects.bulk_create(
             employee_objects, batch_size=500, update_conflicts=True,
@@ -371,12 +373,206 @@ def import_inventory_workbook(uploaded_file):
                     updated_at=timezone.now(),
                 ))
             if pending_assets:
+                source_rows = [asset.source_row for asset in pending_assets]
+                existing_by_row = {
+                    item.source_row: item
+                    for item in Asset.objects.filter(source_sheet=sheet_name, source_row__in=source_rows).select_related('employee')
+                }
+                for desired in pending_assets:
+                    previous = existing_by_row.get(desired.source_row)
+                    if not previous:
+                        continue
+                    old_hr = (previous.hr_code or '').strip().casefold()
+                    new_hr = (desired.hr_code or '').strip().casefold()
+                    if old_hr != new_hr or previous.asset_status != desired.asset_status:
+                        import_changes.append({
+                            'source_sheet': sheet_name,
+                            'source_row': desired.source_row,
+                            'from_employee': previous.employee if previous.employee_id else None,
+                            'from_hr_code': previous.hr_code,
+                            'from_employee_name': previous.employee.name if previous.employee_id else previous.employee_name,
+                            'from_status': previous.asset_status,
+                            'old_hr_code': previous.hr_code,
+                            'old_status': previous.asset_status,
+                        })
                 Asset.objects.bulk_create(
                     pending_assets, batch_size=500, update_conflicts=True,
                     unique_fields=['source_sheet', 'source_row'], update_fields=ASSET_UPDATE_FIELDS,
                 )
                 assets_by_sheet[sheet_name] = len(pending_assets)
                 created_or_updated_assets += len(pending_assets)
+
+        # If a physical serial exists in the Scraped sheet, reconcile matching hardware
+        # inventory rows to SCRAPPED so they do not remain in active custody counts.
+        hardware_types = [Asset.Types.COMPUTER, Asset.Types.PRINTER, Asset.Types.MONITOR, Asset.Types.OTHER]
+        scraped_rows = list(Asset.objects.filter(source_sheet='Scraped').exclude(serial_number='').select_related('employee'))
+        physical_candidates = list(Asset.objects.filter(
+            asset_type__in=hardware_types,
+        ).exclude(serial_number='').select_related('employee'))
+        physical_by_serial = {}
+        for physical_item in physical_candidates:
+            physical_by_serial.setdefault(physical_item.serial_number.casefold(), []).append(physical_item)
+        linked_scrap_ids = set()
+        for scrap in scraped_rows:
+            candidates = [candidate for candidate in physical_by_serial.get(scrap.serial_number.casefold(), []) if candidate.pk != scrap.pk]
+            if not candidates:
+                continue
+            linked_scrap_ids.add(scrap.pk)
+            for physical in candidates:
+                previous_status = physical.asset_status
+                # Prefer the last holder recorded in Scraped; if not linkable, preserve a known holder.
+                from_employee = scrap.employee if scrap.employee_id else (physical.employee if physical.employee_id and not scrap.employee_name else None)
+                from_hr_code = scrap.hr_code or (physical.hr_code if not scrap.employee_name else '')
+                from_name = scrap.employee.name if scrap.employee_id else (scrap.employee_name or physical.employee_name)
+                if physical.asset_status != Asset.Status.SCRAPPED:
+                    Asset.objects.filter(pk=physical.pk).update(
+                        asset_status=Asset.Status.SCRAPPED,
+                        scrap_date=scrap.scrap_date or physical.scrap_date,
+                        scrap_number=scrap.scrap_number or physical.scrap_number,
+                        updated_at=timezone.now(),
+                    )
+                    physical.asset_status = Asset.Status.SCRAPPED
+                else:
+                    Asset.objects.filter(pk=physical.pk).update(
+                        scrap_date=scrap.scrap_date or physical.scrap_date,
+                        scrap_number=scrap.scrap_number or physical.scrap_number,
+                        updated_at=timezone.now(),
+                    )
+                # One stable link event per matching source scrap row, so repeat imports are safe.
+                AssetMovement.objects.get_or_create(
+                    source_event_key=f'scrap-link:{physical.pk}:{scrap.pk}',
+                    defaults={
+                        'asset': physical,
+                        'event_type': AssetMovement.EventTypes.SCRAPPED,
+                        'effective_date': parse_date(scrap.scrap_date),
+                        'from_employee': from_employee,
+                        'to_employee': None,
+                        'from_hr_code': from_hr_code or '',
+                        'from_employee_name': from_name or '',
+                        'to_hr_code': '',
+                        'to_employee_name': 'التخريد',
+                        'from_status': previous_status,
+                        'to_status': Asset.Status.SCRAPPED,
+                        'reason': 'تخريد وارد في الشيت المرجعي Scraped',
+                        'reference_number': scrap.scrap_number or '',
+                        'notes': 'تم الربط بالسيريال نمبر المطابق بين سجل الأصل وشيت Scraped. الملف لا يتضمن بالضرورة جميع الحركات السابقة.',
+                        'source_sheet': 'Scraped',
+                        'source_row': scrap.source_row,
+                        'created_by': actor,
+                    },
+                )
+
+        # Record detected custody/status changes across subsequent workbook imports.
+        for change in import_changes:
+            saved = Asset.objects.filter(source_sheet=change['source_sheet'], source_row=change['source_row']).select_related('employee').first()
+            if not saved:
+                continue
+            old_hr = (change['old_hr_code'] or '').strip().casefold()
+            new_hr = (saved.hr_code or '').strip().casefold()
+            old_status = change['old_status']
+            # Reconciliation may restore the same already-scrapped state from Scraped.
+            if old_hr == new_hr and old_status == saved.asset_status:
+                continue
+            if saved.asset_status == Asset.Status.SCRAPPED and old_status != Asset.Status.SCRAPPED:
+                event_type = AssetMovement.EventTypes.SCRAPPED
+                to_employee, to_hr, to_name = None, '', 'التخريد'
+            elif old_hr != new_hr:
+                if old_hr and new_hr:
+                    event_type = AssetMovement.EventTypes.TRANSFERRED
+                elif new_hr:
+                    event_type = AssetMovement.EventTypes.ASSIGNED
+                else:
+                    event_type = AssetMovement.EventTypes.RETURNED
+                to_employee, to_hr = saved.employee if saved.employee_id else None, saved.hr_code
+                to_name = saved.employee.name if saved.employee_id else saved.employee_name
+            else:
+                event_type = AssetMovement.EventTypes.STATUS_CHANGED
+                to_employee, to_hr = saved.employee if saved.employee_id else None, saved.hr_code
+                to_name = saved.employee.name if saved.employee_id else saved.employee_name
+            key = f"source-change:{change['source_sheet']}:{change['source_row']}:{uuid.uuid4().hex}"
+            AssetMovement.objects.create(
+                asset=saved, event_type=event_type, effective_date=timezone.localdate(),
+                from_employee=change['from_employee'], to_employee=to_employee,
+                from_hr_code=change['from_hr_code'] or '', from_employee_name=change['from_employee_name'] or '',
+                to_hr_code=to_hr or '', to_employee_name=to_name or ('التخريد' if event_type == AssetMovement.EventTypes.SCRAPPED else 'المخزون'),
+                from_status=old_status or '', to_status=saved.asset_status,
+                reason='تغيير اكتُشف عند تحديث الملف المرجعي',
+                notes='تاريخ الحركة الأصلي غير موجود في الملف؛ التاريخ المسجل هنا هو تاريخ اكتشاف التغيير عند الاستيراد.',
+                source_sheet=change['source_sheet'], source_row=change['source_row'],
+                source_event_key=key, created_by=actor,
+            )
+
+        # Seed exactly one truthful baseline entry per imported row. These describe the
+        # source's known state, not invented historical transfer dates.
+        all_source_assets = list(Asset.objects.filter(source_sheet__in=list(SHEET_CONFIGS), source_row__isnull=False).select_related('employee'))
+        existing_baseline_keys = set(AssetMovement.objects.filter(
+            source_event_key__startswith='baseline:'
+        ).values_list('source_event_key', flat=True))
+        already_scrapped_asset_ids = set(AssetMovement.objects.filter(
+            event_type=AssetMovement.EventTypes.SCRAPPED
+        ).values_list('asset_id', flat=True))
+        baseline_events = []
+        for asset in all_source_assets:
+            if asset.source_sheet == 'Scraped' and asset.pk in linked_scrap_ids:
+                # The linked hardware record carries the authoritative scrap event.
+                continue
+            baseline_key = f'baseline:{asset.source_sheet}:{asset.source_row}'
+            if baseline_key in existing_baseline_keys:
+                continue
+            baseline_to_status = asset.asset_status
+            if asset.asset_status == Asset.Status.SCRAPPED and asset.pk in already_scrapped_asset_ids:
+                if asset.source_sheet != 'Scraped':
+                    baseline_to_status = Asset.Status.ACTIVE
+                # The asset has a linked scrap event; retain its source-sheet owner snapshot too.
+                if not asset.hr_code:
+                    event_type = AssetMovement.EventTypes.ADDED_TO_STOCK
+                    from_hr, from_name, from_employee = '', 'الملف المرجعي', None
+                    to_hr, to_name, to_employee = '', 'المخزون', None
+                else:
+                    event_type = AssetMovement.EventTypes.SOURCE_STATE
+                    from_hr, from_name, from_employee = '', 'الملف المرجعي', None
+                    to_hr = asset.hr_code
+                    to_name = asset.employee.name if asset.employee_id else asset.employee_name or asset.hr_code
+                    to_employee = asset.employee if asset.employee_id else None
+                effective_date = None
+                reason = 'الحالة المسجلة في شيت المصدر قبل ربط سجل التخريد'
+                notes = 'هذه لقطة من بيانات الشيت المصدر وليست تاريخ تسليم مؤكدًا؛ سجل التخريد المنفصل يحتوي على التاريخ المتاح.'
+            elif asset.asset_status == Asset.Status.SCRAPPED:
+                event_type = AssetMovement.EventTypes.SCRAPPED
+                from_hr = asset.hr_code
+                from_name = asset.employee.name if asset.employee_id else asset.employee_name
+                to_hr, to_name, from_employee, to_employee = '', 'التخريد', asset.employee if asset.employee_id else None, None
+                effective_date = parse_date(asset.scrap_date)
+                reason = 'حالة تخريد كما وردت في الملف المرجعي'
+                notes = 'تم نقل حالة التخريد المتاحة في المصدر. سجل التنقلات الأقدم لا يتوفر إلا إذا كان موثقًا في الملف.'
+            elif asset.hr_code:
+                event_type = AssetMovement.EventTypes.SOURCE_STATE
+                from_hr, from_name, from_employee = '', 'الملف المرجعي', None
+                to_hr = asset.hr_code
+                to_name = asset.employee.name if asset.employee_id else asset.employee_name or asset.hr_code
+                to_employee = asset.employee if asset.employee_id else None
+                effective_date = None
+                reason = 'حالة العهدة كما وردت في الملف المرجعي'
+                notes = 'تاريخ التسليم الأصلي غير متوفر في الملف؛ هذا سجل للحالة المعروفة وقت الاستيراد وليس تاريخ حركة مخترعًا.'
+            else:
+                event_type = AssetMovement.EventTypes.ADDED_TO_STOCK
+                from_hr, from_name, from_employee = '', 'الملف المرجعي', None
+                to_hr, to_name, to_employee = '', 'المخزون', None
+                effective_date = None
+                reason = 'أصل مسجل في الملف المرجعي دون HR Code مطابق'
+                notes = 'لا يوجد موظف مؤكد مرتبط بالسجل في المصدر وقت الاستيراد.'
+            baseline_events.append(AssetMovement(
+                asset=asset, event_type=event_type, effective_date=effective_date,
+                from_employee=from_employee, to_employee=to_employee,
+                from_hr_code=from_hr or '', from_employee_name=from_name or '',
+                to_hr_code=to_hr or '', to_employee_name=to_name or '',
+                from_status='', to_status=baseline_to_status,
+                reason=reason, reference_number=asset.scrap_number or '', notes=notes,
+                source_sheet=asset.source_sheet, source_row=asset.source_row,
+                source_event_key=baseline_key, created_by=actor,
+            ))
+        if baseline_events:
+            AssetMovement.objects.bulk_create(baseline_events, batch_size=500, ignore_conflicts=True)
 
     return {
         'employees': len(employee_map),

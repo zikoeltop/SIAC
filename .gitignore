@@ -34,3 +34,4 @@ Thumbs.db
 *.log
 # Build-time Arabic font is downloaded by build.sh; do not commit generated font files.
 static/fonts/NotoSansArabic-Regular.ttf
+static/fonts/NotoSansArabic-Bold.ttf

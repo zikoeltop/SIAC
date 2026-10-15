@@ -261,211 +261,193 @@ def build_pdf(device):
     buf.seek(0)
     return buf
 
-# --- Employee custody report (generated from database records imported from Custody Lookup sources) ---
+# --- Employee custody report ---
 def build_custody_pdf(employee, assets, hr_code=None):
-    """Create the professional multi-page employee custody report with the SIAC logo."""
-    from datetime import date
-    from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import Flowable
+    """Render SIAC's approved one-page custody report with notes and signature fields."""
+    from weasyprint import HTML
     from .models import Asset
 
-    arabic_font = register_fonts()
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=A4, rightMargin=25, leftMargin=25, topMargin=92, bottomMargin=30,
-        title='SIAC Employee Custody Report', author='SIAC IT',
-    )
-    label_ar = ParagraphStyle('custody_label_ar', fontName=arabic_font, fontSize=8.5, leading=11, alignment=2, textColor=colors.HexColor('#526174'))
-    value_mix = ParagraphStyle('custody_value_mix', fontName='Helvetica', fontSize=8.7, leading=11.5, alignment=2, textColor=colors.HexColor('#17233B'))
-    title_ar = ParagraphStyle('custody_title_ar', fontName=arabic_font, fontSize=17, leading=22, alignment=1, textColor=colors.HexColor('#17365D'), spaceAfter=3)
-    subtitle_en = ParagraphStyle('custody_subtitle_en', fontName='Helvetica-Bold', fontSize=9, leading=12, alignment=1, textColor=colors.HexColor('#1F8A8A'), spaceAfter=10)
-    section_ar = ParagraphStyle('custody_section_ar', fontName=arabic_font, fontSize=10, leading=14, alignment=2, textColor=colors.HexColor('#17365D'), spaceBefore=6, spaceAfter=5)
-    table_head = ParagraphStyle('custody_table_head', fontName=arabic_font, fontSize=8, leading=10, alignment=1, textColor=colors.white)
-    table_en_head = ParagraphStyle('custody_table_en_head', fontName='Helvetica-Bold', fontSize=7.5, leading=9, alignment=1, textColor=colors.white)
-    table_cell = ParagraphStyle('custody_table_cell', fontName='Helvetica', fontSize=7.3, leading=9, alignment=2, textColor=colors.HexColor('#18273A'))
-    table_cell_ar = ParagraphStyle('custody_table_cell_ar', fontName=arabic_font, fontSize=7.3, leading=9, alignment=2, textColor=colors.HexColor('#18273A'))
-    small_ar = ParagraphStyle('custody_small_ar', fontName=arabic_font, fontSize=8.2, leading=11, alignment=2, textColor=colors.HexColor('#27364B'))
-
-    def draw_header(canvas, document):
-        canvas.saveState()
-        page_width, page_height = A4
-        logo_path = BASE_DIR / 'static' / 'img' / 'siac_logo.png'
-        if logo_path.exists():
-            try:
-                canvas.drawImage(str(logo_path), 27, page_height - 78, width=83, height=67, preserveAspectRatio=True, mask='auto', anchor='c')
-            except Exception:
-                pass
-        company = rtl_arabic('الشركة الهندسية للصناعات والتشييد (سياك)')
-        department = rtl_arabic('إدارة الحاسب الآلي ونظم المعلومات')
-        canvas.setFont(arabic_font, 11)
-        canvas.setFillColor(colors.HexColor('#17365D'))
-        canvas.drawRightString(page_width - 28, page_height - 40, company)
-        canvas.setFont(arabic_font, 9)
-        canvas.setFillColor(colors.HexColor('#344B68'))
-        canvas.drawRightString(page_width - 28, page_height - 57, department)
-        canvas.setStrokeColor(colors.HexColor('#1F8A8A'))
-        canvas.setLineWidth(1.2)
-        canvas.line(27, page_height - 84, page_width - 27, page_height - 84)
-        canvas.restoreState()
+    base_dir = Path(__file__).resolve().parent.parent
+    logo_path = base_dir / 'static' / 'img' / 'siac_logo.png'
+    regular_font = base_dir / 'static' / 'fonts' / 'NotoSansArabic-Regular.ttf'
+    bold_font = base_dir / 'static' / 'fonts' / 'NotoSansArabic-Bold.ttf'
 
     asset_rows = list(assets)
-    employee_name = ''
+    # Keep only current-custody details in this report. Historical 2025/2026 request
+    # sheets are intentionally not presented as active employee assets.
+    asset_rows = [a for a in asset_rows if a.asset_type not in {Asset.Types.NEW_2026, Asset.Types.REQUEST_2025, Asset.Types.SCRAP}]
+
+    def val(obj, key, fallback=''):
+        if obj is None:
+            return fallback
+        value = getattr(obj, key, fallback)
+        return '' if value is None else str(value).strip()
+
+    def esc(value):
+        value = clean_text(value)
+        return html.escape(value, quote=True).replace('\n', '<br>')
+
     if employee:
-        employee_name = getattr(employee, 'name', '') or getattr(employee, 'employee_name', '')
-        hr_code = getattr(employee, 'hr_code', '') or hr_code
-    elif asset_rows:
-        employee_name = next((a.display_employee_name for a in asset_rows if a.display_employee_name and a.display_employee_name != '-'), '')
-    employee_name = employee_name or 'Employee record not found'
+        employee_name = val(employee, 'arabic_name') or val(employee, 'name') or val(employee, 'employee_name')
+        hr_code = val(employee, 'hr_code') or hr_code
+    else:
+        employee_name = next((val(a, 'display_employee_name') for a in asset_rows if val(a, 'display_employee_name') not in ('', '-')), '')
+    employee_name = employee_name or 'غير مسجل'
     hr_code = str(hr_code or '')
 
-    counts = {
-        'computer': sum(1 for a in asset_rows if a.asset_type == 'computer'),
-        'printer': sum(1 for a in asset_rows if a.asset_type == 'printer'),
-        'monitor': sum(1 for a in asset_rows if a.asset_type == 'monitor'),
-        'gstar_license': sum(1 for a in asset_rows if a.asset_type == 'gstar_license'),
-        'new_2026': sum(1 for a in asset_rows if a.asset_type == 'new_2026'),
-        'request_2025': sum(1 for a in asset_rows if a.asset_type == 'request_2025'),
-    }
-    total_assets = len(asset_rows)
+    def profile_value(primary, secondary=None):
+        first = val(employee, primary)
+        second = val(employee, secondary) if secondary else ''
+        if primary == 'arabic_name' and not first and not second:
+            first = employee_name
+        if first and second and first.strip() != second.strip():
+            return f'{esc(first)}<span class="subvalue" dir="ltr">{esc(second)}</span>'
+        return esc(first or second or '-')
 
-    story = [
-        p_ar('بيان عهدة الموظف', title_ar),
-        p_en('EMPLOYEE CUSTODY REPORT', subtitle_en),
-    ]
-
-    def employee_value(attribute, asset_attribute=None):
-        value = getattr(employee, attribute, '') if employee else ''
+    def field_value(attribute, asset_attribute=None):
+        value = val(employee, attribute)
         if not value and asset_attribute and asset_rows:
-            value = getattr(asset_rows[0], asset_attribute, '')
-        return value or '-'
+            value = val(asset_rows[0], asset_attribute)
+        return esc(value or '-')
 
-    employee_fields = [
-        [p_ar('كود الموظف', label_ar), p_mixed(hr_code or '-', value_mix), p_ar('اسم الموظف', label_ar), p_mixed(employee_name, value_mix)],
-        [p_ar('المشروع / الموقع', label_ar), p_mixed(employee_value('project', 'project'), value_mix), p_ar('القطاع', label_ar), p_mixed(employee_value('sector', 'sector'), value_mix)],
-        [p_ar('الإدارة', label_ar), p_mixed(employee_value('department', 'department'), value_mix), p_ar('الوظيفة', label_ar), p_mixed(employee_value('position'), value_mix)],
-        [p_ar('الشركة', label_ar), p_mixed(employee_value('company', 'company'), value_mix), p_ar('حالة الموظف', label_ar), p_mixed(employee_value('employment_status'), value_mix)],
-    ]
-    profile = Table(employee_fields, colWidths=[70, 192, 70, 208], hAlign='RIGHT')
-    profile.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F0F5FA')),
-        ('BACKGROUND', (2, 0), (2, -1), colors.HexColor('#F0F5FA')),
-        ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#CAD5E2')),
-        ('INNERGRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#DAE2EC')),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 5), ('RIGHTPADDING', (0, 0), (-1, -1), 5),
-        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-    ]))
-    story += [profile, Spacer(1, 8), p_ar('ملخص العهدة', section_ar)]
+    type_labels = {
+        Asset.Types.COMPUTER: 'كمبيوتر',
+        Asset.Types.PRINTER: 'طابعة',
+        Asset.Types.MONITOR: 'شاشة',
+        Asset.Types.GSTAR: 'ترخيص GStar CAD',
+        Asset.Types.OTHER: 'أصل آخر',
+    }
+    status_labels = {
+        Asset.Status.ACTIVE: 'عهدة نشطة',
+        Asset.Status.PENDING: 'معلق',
+        Asset.Status.SCRAPPED: 'مخرد',
+        Asset.Status.ARCHIVED: 'مؤرشف',
+    }
 
-    summary_labels = [
-        ('إجمالي الأصول', total_assets), ('أجهزة الكمبيوتر', counts['computer']),
-        ('الطابعات', counts['printer']), ('الشاشات', counts['monitor']),
-        ('تراخيص GStar CAD', counts['gstar_license']), ('تعيينات 2026', counts['new_2026']),
-        ('طلبات 2025', counts['request_2025']),
-    ]
-    summary_cells = []
-    for label, count in summary_labels:
-        summary_cells.append(Paragraph(f'{mixed_markup(label)}<br/><font name="Helvetica-Bold" size="13" color="#17365D">{count}</font>', ParagraphStyle(f'sum{len(summary_cells)}', fontName=arabic_font, fontSize=8, leading=12, alignment=1, textColor=colors.HexColor('#344B68'))))
-    summary_second = summary_cells[4:] + [p_en('', value_mix)]
-    summary = Table([summary_cells[:4], summary_second], colWidths=[135, 135, 135, 135], hAlign='RIGHT')
-    summary.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F4F8FC')),
-        ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#D0DAE6')),
-        ('INNERGRID', (0, 0), (-1, -1), 0.35, colors.HexColor('#DCE4EE')),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 3), ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-    ]))
-    story += [summary, Spacer(1, 7), p_ar('تفاصيل الأصول المسجلة على الموظف', section_ar)]
-
-    headers = [
-        p_ar('نوع الأصل', table_head), p_en('Serial Number', table_en_head),
-        p_en('Computer Name New', table_en_head), p_ar('الوصف / الموديل', table_head),
-        p_ar('الحالة', table_head),
-    ]
-    detail_rows = [headers]
-    type_labels = dict(Asset.Types.choices)
-    status_labels = dict(Asset.Status.choices)
+    asset_html = []
     for asset in asset_rows:
-        description_parts = [asset.item_type, asset.brand, asset.model]
-        if asset.processor or asset.ram or asset.storage:
-            spec = ' / '.join(x for x in [asset.processor, f'RAM {asset.ram}' if asset.ram else '', asset.storage] if x)
-            if spec:
-                description_parts.append(spec)
-        if asset.asset_tag:
-            description_parts.append(f'Asset No. {asset.asset_tag}')
-        if asset.toner_code:
-            description_parts.append(f'Toner: {asset.toner_code}')
-        if asset.license_version:
-            description_parts.append(f'License: {asset.license_version}')
-        if asset.license_activated:
-            description_parts.append(f'Activated: {asset.license_activated}')
-        if asset.manufacturing_year:
-            description_parts.append(f'Year: {asset.manufacturing_year}')
-        if asset.purchase_date:
-            description_parts.append(f'Date: {asset.purchase_date}')
-        if asset.software_licenses:
-            installed = [str(k) for k, v in asset.software_licenses.items() if str(v).strip().casefold() not in ('', 'no', 'none', 'false', '0', 'n/a')]
-            if installed:
-                description_parts.append('Software: ' + ', '.join(installed))
-        device_description = ' | '.join(str(x) for x in description_parts if x)
-        detail_rows.append([
-            p_mixed(type_labels.get(asset.asset_type, asset.asset_type), table_cell),
-            p_en(asset.serial_number or '-', table_cell),
-            p_mixed(asset.computer_name_new or asset.computer_name or '-', table_cell),
-            p_mixed(device_description or '-', table_cell),
-            p_mixed(status_labels.get(asset.asset_status, asset.asset_status), table_cell),
-        ])
-    if not asset_rows:
-        detail_rows.append([p_ar('لا توجد أصول مسجلة على هذا الكود حاليًا.', table_cell_ar), '', '', '', ''])
-    detail_table = Table(detail_rows, colWidths=[78, 100, 105, 180, 72], repeatRows=1, hAlign='RIGHT')
-    detail_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#17365D')),
-        ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#CAD5E2')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F7FAFD')]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4), ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-        ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('SPAN', (0, 1), (-1, 1)) if not asset_rows else ('LEFTPADDING', (0, 0), (-1, -1), 4),
-    ]))
-    story += [detail_table, Spacer(1, 13)]
+        kind = val(asset, 'item_type')
+        brand = val(asset, 'brand')
+        model = val(asset, 'model')
+        description_parts = [part for part in (kind, brand, model) if part]
+        description = ' | '.join(description_parts)
+        specs = []
+        if val(asset, 'processor'):
+            specs.append(val(asset, 'processor'))
+        if val(asset, 'ram'):
+            specs.append('RAM ' + val(asset, 'ram'))
+        if val(asset, 'storage'):
+            specs.append(val(asset, 'storage'))
+        if specs:
+            description = (description + ' - ' if description else '') + ' / '.join(specs)
+        serial = val(asset, 'serial_number') or '-'
+        computer_name = val(asset, 'computer_name_new') or val(asset, 'computer_name') or '-'
+        asset_type = type_labels.get(val(asset, 'asset_type'), val(asset, 'asset_type')) or '-'
+        status = status_labels.get(val(asset, 'asset_status'), val(asset, 'asset_status')) or '-'
+        asset_html.append(
+            '<tr>'
+            f'<td>{esc(asset_type)}</td>'
+            f'<td class="eng">{esc(serial)}</td>'
+            f'<td class="eng">{esc(computer_name)}</td>'
+            f'<td dir="auto">{esc(description or "-")}</td>'
+            f'<td>{esc(status)}</td>'
+            '</tr>'
+        )
 
-    footer_rows = [
-        [p_ar('اسم مسئول الدعم الفني : ......................................', small_ar),
-         p_ar('تاريخ التقرير : ................................................', small_ar)],
-        ['', p_ar('توقيع المستخدم : ......................................', small_ar)],
-    ]
-    footer_table = Table(footer_rows, colWidths=[272, 272], hAlign='RIGHT')
-    footer_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 6), ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-        ('LEFTPADDING', (0, 0), (-1, -1), 4), ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-    ]))
+    if not asset_html:
+        asset_html.append('<tr><td colspan="5" class="no-assets">لا توجد أصول نشطة مسجلة على هذا الموظف.</td></tr>')
 
-    class BottomAlignedFooter(Flowable):
-        def __init__(self, table):
-            super().__init__()
-            self.table = table
-            self.width = 0
-            self.height = 0
+    # Keep the large note-taking area for ordinary reports and compact the table
+    # when an employee has many items so common cases remain on one A4 page.
+    count = len(asset_rows)
+    if count <= 4:
+        row_padding, table_font, notes_height = '1.8mm', '7.4pt', 73
+    elif count <= 8:
+        row_padding, table_font, notes_height = '1.25mm', '7pt', 58
+    elif count <= 12:
+        row_padding, table_font, notes_height = '0.95mm', '6.6pt', 43
+    elif count <= 18:
+        row_padding, table_font, notes_height = '0.7mm', '6.1pt', 28
+    elif count <= 25:
+        row_padding, table_font, notes_height = '0.45mm', '5.7pt', 16
+    else:
+        row_padding, table_font, notes_height = '0.35mm', '5.2pt', 8
 
-        def wrap(self, available_width, available_height):
-            self.width = available_width
-            # Fill the remaining frame to anchor the signatures at the page bottom.
-            # If there is too little room, ReportLab moves this block to the next page.
-            self.height = max(available_height, 85)
-            return self.width, self.height
+    logo_uri = logo_path.as_uri() if logo_path.exists() else ''
+    # The build script downloads these fonts on Railway; the system font paths are
+    # a local testing fallback and are not included in the project ZIP.
+    fallback_regular = Path('/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf')
+    fallback_bold = Path('/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf')
+    font_regular_uri = (regular_font if regular_font.exists() else fallback_regular).as_uri()
+    font_bold_uri = (bold_font if bold_font.exists() else fallback_bold).as_uri()
+    company = val(employee, 'company') or (val(asset_rows[0], 'company') if asset_rows else '') or 'سياك للإنشاءات'
+    project = field_value('project', 'project')
+    sector = field_value('sector', 'sector')
+    department = field_value('department', 'department')
+    position = field_value('position')
+    employment_status = field_value('employment_status')
 
-        def draw(self):
-            _, table_height = self.table.wrapOn(self.canv, self.width, 60)
-            self.canv.saveState()
-            self.canv.setStrokeColor(colors.HexColor('#1F8A8A'))
-            self.canv.setLineWidth(0.8)
-            self.canv.line(0, table_height + 9, self.width, table_height + 9)
-            self.table.drawOn(self.canv, 0, 3)
-            self.canv.restoreState()
+    document = f'''<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face {{ font-family: NotoArabic; src: url("{font_regular_uri}"); font-weight: 400; }}
+@font-face {{ font-family: NotoArabic; src: url("{font_bold_uri}"); font-weight: 700; }}
+@page {{ size: A4; margin: 9mm 10mm 10mm 10mm; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: NotoArabic, sans-serif; color: #18273a; font-size: 8.5pt; direction: rtl; margin: 0; }}
+.header {{ display:flex; flex-direction:row; justify-content:space-between; align-items:center; border-bottom:2px solid #1f8a8a; padding:0 0 4mm; margin-bottom:4mm; min-height:24mm; }}
+.logo {{ width:29mm; height:24mm; object-fit:contain; }}
+.company {{ text-align:right; color:#17365d; line-height:1.55; font-size:10pt; font-weight:700; }}
+.subline {{ font-weight:400; font-size:8.7pt; color:#344b68; }}
+.title {{ text-align:center; font-size:17pt; font-weight:700; color:#17365d; margin:1mm 0 0; line-height:1.3; }}
+.subtitle {{ font:bold 8.5pt Arial,sans-serif; direction:ltr; text-align:center; color:#1f8a8a; letter-spacing:.8px; margin:1mm 0 4mm; }}
+table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+.profile {{ margin-bottom:4mm; }}
+.profile td {{ border:.4pt solid #cad5e2; padding:2mm 2.2mm; vertical-align:middle; overflow-wrap:anywhere; font-size:7.8pt; line-height:1.25; }}
+.profile .label {{ width:16%; background:#f0f5fa; color:#526174; font-weight:700; }}
+.profile .value {{ width:34%; }}
+.subvalue {{ display:block; direction:ltr; font:7pt Arial,sans-serif; color:#526174; margin-top:1px; text-align:right; }}
+.section-title {{ color:#17365d; font-size:10pt; font-weight:700; margin:2mm 0 2mm; }}
+.assets th {{ color:#17365d; background:#eaf2f5; font-weight:700; padding:2mm 1.5mm; font-size:7.1pt; border:.4pt solid #cad5e2; }}
+.assets td {{ padding:{row_padding} 1.5mm; border:.4pt solid #cad5e2; vertical-align:middle; text-align:right; line-height:1.25; overflow-wrap:anywhere; font-size:{table_font}; }}
+.assets tbody tr:nth-child(even) td {{ background:#f7fafd; }}
+.assets td.eng, .assets th.eng {{ direction:ltr; text-align:center; font-family:Arial,sans-serif; }}
+.assets .type {{ width:13%; }} .assets .serial {{ width:18%; }} .assets .computer {{ width:21%; }} .assets .description {{ width:32%; }} .assets .status {{ width:16%; }}
+.no-assets {{ text-align:center!important; color:#526174; padding:4mm!important; }}
+.notes-title {{ margin-top:4mm; margin-bottom:1.5mm; color:#17365d; font-size:10pt; font-weight:700; }}
+.notes-box {{ border:.7pt solid #cad5e2; border-radius:2mm; height:{notes_height}mm; background:#fff; }}
+.footer {{ position:fixed; bottom:0; left:0; right:0; border-top:1.1pt solid #1f8a8a; padding-top:3mm; height:23mm; color:#18273a; background:white; }}
+.footerrow {{ display:flex; justify-content:space-between; gap:8mm; margin-bottom:3.2mm; }}
+.footeritem {{ flex:1; white-space:nowrap; font-size:8.3pt; }}
+.sign {{ width:55%; }}
+</style>
+</head>
+<body>
+<header class="header">
+  <div class="company">الشركة الهندسية للصناعات والتشييد (سياك)<br><span class="subline">إدارة الحاسب الآلي ونظم المعلومات</span></div>
+  {f'<img class="logo" src="{logo_uri}" alt="SIAC Construction">' if logo_uri else ''}
+</header>
+<div class="title">بيان عهدة الموظف</div>
+<div class="subtitle">EMPLOYEE CUSTODY REPORT</div>
+<table class="profile"><tbody>
+<tr><td class="label">كود الموظف / HR ID</td><td class="value labelen" dir="ltr">{esc(hr_code or '-')}</td><td class="label">اسم الموظف / Employee Name</td><td class="value" dir="auto">{profile_value('arabic_name', 'name')}</td></tr>
+<tr><td class="label">المشروع / Project</td><td class="value" dir="auto">{project}</td><td class="label">القطاع / Sector</td><td class="value" dir="auto">{sector}</td></tr>
+<tr><td class="label">الإدارة / Department</td><td class="value" dir="auto">{department}</td><td class="label">الوظيفة / Position</td><td class="value" dir="auto">{position}</td></tr>
+<tr><td class="label">الشركة / Company</td><td class="value" dir="auto">{esc(company)}</td><td class="label">حالة الموظف / Status</td><td class="value" dir="auto">{employment_status}</td></tr>
+</tbody></table>
+<div class="section-title">تفاصيل الأصول المسجلة على الموظف <span style="font:700 7.5pt Arial,sans-serif; color:#7890a2;">ASSET DETAILS</span></div>
+<table class="assets"><thead><tr><th class="type">نوع الأصل</th><th class="serial eng">Serial Number</th><th class="computer eng">Computer Name New</th><th class="description">الوصف / الموديل</th><th class="status">الحالة</th></tr></thead>
+<tbody>{''.join(asset_html)}</tbody></table>
+<div class="notes-title">ملاحظات <span style="font:700 7.5pt Arial,sans-serif; color:#7890a2;">NOTES</span></div>
+<div class="notes-box"></div>
+<div class="footer">
+  <div class="footerrow"><div class="footeritem">اسم مسئول الدعم الفني : ......................................</div><div class="footeritem">تاريخ التقرير : ................................................</div></div>
+  <div class="footerrow"><div class="footeritem sign">توقيع المستخدم : ......................................</div></div>
+  <div style="display:flex;justify-content:space-between;border-top:.4pt solid #dce5ec;padding-top:1.5mm;margin-top:1mm;color:#9aabb8;font-size:6.5pt;"><span>بيان عهدة الموظف</span><span style="font-family:Arial,sans-serif;direction:ltr;">SIAC • INTERNAL DOCUMENT</span><span>إدارة الحاسب الآلي ونظم المعلومات</span></div>
+</div>
+</body></html>'''
 
-    story.append(BottomAlignedFooter(footer_table))
-    doc.build(story, onFirstPage=draw_header, onLaterPages=draw_header)
-    buf.seek(0)
-    return buf
+    pdf_bytes = HTML(string=document, base_url=str(base_dir)).write_pdf()
+    return io.BytesIO(pdf_bytes)

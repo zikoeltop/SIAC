@@ -4,11 +4,12 @@ from collections import OrderedDict
 from datetime import datetime
 
 from django.http import HttpResponse
+from django.db.models import F
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-from .models import Asset, Employee
+from .models import Asset, AssetMovement, Employee
 
 NAVY = '17365D'
 TEAL = '1F8A8A'
@@ -127,6 +128,38 @@ def build_inventory_excel_response():
     grouped = OrderedDict()
     for asset in assets:
         grouped.setdefault(asset.source_sheet or 'manual', []).append(asset)
+    ws_moves = wb.create_sheet('Movement History')
+    movement_headers = [
+        'Event ID', 'Serial Number', 'Asset Type', 'Event Type', 'Effective Date',
+        'From HR Code', 'From Employee', 'To HR Code', 'To Employee',
+        'From Status', 'To Status', 'Reason', 'Reference Number', 'Notes',
+        'Source Sheet', 'Source Row', 'Recorded At', 'Recorded By',
+    ]
+    ws_moves.append(movement_headers)
+    movements = AssetMovement.objects.select_related('asset', 'from_employee', 'to_employee', 'created_by').order_by(F('effective_date').asc(nulls_first=True), 'created_at', 'id')
+    for movement in movements.iterator(chunk_size=500):
+        ws_moves.append([
+            movement.pk,
+            movement.asset.serial_number,
+            movement.asset.get_asset_type_display(),
+            movement.get_event_type_display(),
+            _safe_excel_value(movement.effective_date),
+            movement.from_hr_code,
+            movement.from_employee_name or (movement.from_employee.name if movement.from_employee_id else ''),
+            movement.to_hr_code,
+            movement.to_employee_name or (movement.to_employee.name if movement.to_employee_id else ''),
+            movement.from_status,
+            movement.to_status,
+            movement.reason,
+            movement.reference_number,
+            movement.notes,
+            movement.source_sheet,
+            movement.source_row,
+            _safe_excel_value(movement.created_at),
+            movement.created_by.get_username() if movement.created_by_id else '',
+        ])
+    _format_sheet(ws_moves)
+
     for original_sheet, sheet_assets in grouped.items():
         # Create a tab per original source sheet, retaining its source-specific columns.
         base_name = {'all': 'Computers', 'manual': 'Manual Entry'}.get(original_sheet, original_sheet)

@@ -133,6 +133,77 @@ class Asset(models.Model):
         return f'{self.serial_number or self.model or self.item_type or self.get_asset_type_display()} ({self.hr_code or "unassigned"})'
 
 
+class AssetMovement(models.Model):
+    """Append-only audit trail of custody/stock/status changes for each asset record."""
+    class EventTypes(models.TextChoices):
+        SOURCE_STATE = 'source_state', 'الحالة المسجلة في الملف المرجعي'
+        ADDED_TO_STOCK = 'added_to_stock', 'إضافة إلى المخزون'
+        ASSIGNED = 'assigned', 'تسليم لموظف'
+        TRANSFERRED = 'transferred', 'نقل عهدة بين موظفين'
+        RETURNED = 'returned', 'إرجاع إلى المخزون'
+        SCRAPPED = 'scrapped', 'تخريد'
+        STATUS_CHANGED = 'status_changed', 'تغيير حالة الأصل'
+
+    asset = models.ForeignKey(Asset, on_delete=models.PROTECT, related_name='movements', verbose_name='الأصل')
+    event_type = models.CharField(max_length=32, choices=EventTypes.choices, db_index=True)
+    effective_date = models.DateField(null=True, blank=True, db_index=True, verbose_name='تاريخ الحركة')
+    from_employee = models.ForeignKey(
+        Employee, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_movements_from', verbose_name='الموظف السابق',
+    )
+    to_employee = models.ForeignKey(
+        Employee, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_movements_to', verbose_name='الموظف الجديد',
+    )
+    from_hr_code = models.CharField(max_length=80, blank=True, db_index=True)
+    from_employee_name = models.CharField(max_length=255, blank=True)
+    to_hr_code = models.CharField(max_length=80, blank=True, db_index=True)
+    to_employee_name = models.CharField(max_length=255, blank=True)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20, blank=True)
+    reason = models.CharField(max_length=255, blank=True, verbose_name='سبب الحركة')
+    reference_number = models.CharField(max_length=120, blank=True, verbose_name='رقم المستند')
+    notes = models.TextField(blank=True)
+    source_sheet = models.CharField(max_length=64, blank=True)
+    source_row = models.PositiveIntegerField(null=True, blank=True)
+    # Stable key makes source-baseline events idempotent when the workbook is re-imported.
+    source_event_key = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='asset_movement_events',
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['effective_date', 'created_at', 'id']
+        indexes = [
+            models.Index(fields=['asset', 'effective_date'], name='move_asset_date_idx'),
+            models.Index(fields=['from_hr_code', 'effective_date'], name='move_from_hr_date_idx'),
+            models.Index(fields=['to_hr_code', 'effective_date'], name='move_to_hr_date_idx'),
+        ]
+
+    @property
+    def from_display(self):
+        return self.from_employee_name or self.from_hr_code or 'المخزون'
+
+    @property
+    def to_display(self):
+        return self.to_employee_name or self.to_hr_code or ('التخريد' if self.event_type == self.EventTypes.SCRAPPED else 'المخزون')
+
+    @property
+    def from_status_display(self):
+        labels = dict(Asset.Status.choices)
+        return labels.get(self.from_status, self.from_status or '-')
+
+    @property
+    def to_status_display(self):
+        labels = dict(Asset.Status.choices)
+        return labels.get(self.to_status, self.to_status or '-')
+
+    def __str__(self):
+        return f'{self.asset} - {self.get_event_type_display()}'
+
+
 # Legacy computer-only inventory model is retained for compatibility with the earlier report/import flow.
 class Device(models.Model):
     serial_number = models.CharField(max_length=150, unique=True, db_index=True)

@@ -29,13 +29,37 @@
 {% if mode == 'hr' or matched_owners|length == 1 %}
   {% if employee or custody_assets or mode == 'hr' and found %}
     <div class="card employee-summary">
-      <div class="summary-title"><div><p class="eyebrow">EMPLOYEE CUSTODY</p><h2>{{ display_employee_name|default:'بيانات الموظف غير موجودة في قائمة ID' }}</h2><p>HR Code: <strong class="mono">{{ resolved_hr_code }}</strong></p></div><span class="summary-count"><strong>{{ active_count }}</strong><small>أصل نشط</small></span></div>
-      <div class="details-grid"><div><small>المشروع / الموقع</small><b>{{ display_project|default:'-' }}</b></div><div><small>القطاع</small><b>{{ display_sector|default:'-' }}</b></div><div><small>الإدارة</small><b>{{ display_department|default:'-' }}</b></div><div><small>الوظيفة</small><b>{{ employee.position|default:'-' }}</b></div><div><small>حالة الموظف</small><b>{{ employee.employment_status|default:'-' }}</b></div></div>
+      <div class="summary-title"><div><p class="eyebrow">EMPLOYEE CUSTODY</p><h2>{{ employee.name|default:matched_owners.0.employee_name|default:'بيانات الموظف غير موجودة في قائمة ID' }}</h2><p>HR Code: <strong class="mono">{{ resolved_hr_code }}</strong></p></div><span class="summary-count"><strong>{{ active_count }}</strong><small>أصل نشط</small></span></div>
+      <div class="details-grid"><div><small>المشروع / الموقع</small><b>{{ employee.project|default:matched_owners.0.project|default:'-' }}</b></div><div><small>القطاع</small><b>{{ employee.sector|default:'-' }}</b></div><div><small>الإدارة</small><b>{{ employee.department|default:'-' }}</b></div><div><small>الوظيفة</small><b>{{ employee.position|default:'-' }}</b></div><div><small>حالة الموظف</small><b>{{ employee.employment_status|default:'-' }}</b></div></div>
       {% if resolved_hr_code %}<a class="button" href="{% url 'download_custody_report' resolved_hr_code %}">تحميل تقرير العهدة PDF</a>{% endif %}
     </div>
     <div class="card"><div class="section-heading"><div><h2>الأصول المسجلة على العهدة</h2><p>الأصول المخردة غير داخلة في إجمالي العهدة النشطة.</p></div></div>
       {% if custody_assets %}<div class="table-wrap"><table><thead><tr><th>الفئة</th><th>Serial Number</th><th>Computer Name</th><th>Brand / Model</th><th>المشروع</th><th>الحالة</th></tr></thead><tbody>{% for asset in custody_assets %}<tr><td><span class="type-pill">{{ asset.get_asset_type_display }}</span></td><td class="mono">{{ asset.serial_number|default:'-' }}</td><td>{{ asset.computer_name_new|default:asset.computer_name|default:'-' }}</td><td>{{ asset.brand }} {{ asset.model }}<small class="subline">{{ asset.item_type }}</small></td><td>{{ asset.project|default:'-' }}</td><td>{{ asset.get_asset_status_display }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-inline">لا توجد أصول نشطة مرتبطة بهذا الموظف حاليًا.</div>{% endif %}
     </div>
   {% endif %}
+{% endif %}
+
+{% if history_groups %}
+  <div class="card custody-history-card">
+    <div class="section-heading"><div><h2>السجل التاريخي للأجهزة وحركات العهدة</h2><p>السجل متاح لكل المستخدمين عند البحث. التواريخ التي لم يوردها الملف المرجعي ستظهر بوضوح على أنها غير متاحة، ولن نفترض تواريخ أو حركات غير موجودة في المصدر.</p></div></div>
+    {% for group in history_groups %}
+      <div class="history-asset-block">
+        <h3>{{ group.asset.get_asset_type_display }} — {{ group.asset.serial_number|default:group.asset.model|default:group.asset.computer_name|default:'أصل بدون Serial Number' }}</h3>
+        <div class="table-wrap"><table class="history-table"><thead><tr><th>تاريخ الحركة</th><th>نوع الحركة</th><th>من الموظف</th><th>إلى الموظف</th><th>الحالة</th><th>السبب / ملاحظات</th><th>المصدر</th></tr></thead><tbody>
+        {% for movement in group.movements %}
+          <tr>
+            <td>{% if movement.effective_date %}{{ movement.effective_date|date:'Y-m-d' }}{% else %}<span class="muted">غير متاح في الملف المصدر</span>{% endif %}</td>
+            <td>{{ movement.get_event_type_display }}</td>
+            <td>{{ movement.from_employee_name|default:movement.from_hr_code|default:'المخزون' }}{% if movement.from_hr_code %}<small class="subline">HR {{ movement.from_hr_code }}</small>{% endif %}</td>
+            <td>{{ movement.to_employee_name|default:movement.to_hr_code|default:'المخزون / التخريد' }}{% if movement.to_hr_code %}<small class="subline">HR {{ movement.to_hr_code }}</small>{% endif %}</td>
+            <td>{{ movement.from_status_display }} &rarr; {{ movement.to_status_display }}</td>
+            <td>{{ movement.reason|default:movement.notes|default:'-' }}</td>
+            <td>{{ movement.source_sheet|default:'إدخال يدوي' }}{% if movement.source_row %}<small class="subline">صف {{ movement.source_row }}</small>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody></table></div>
+      </div>
+    {% endfor %}
+  </div>
 {% endif %}
 {% endblock %}

@@ -1,4 +1,5 @@
 from django import forms
+from django.utils import timezone
 from .models import Asset, Employee
 
 
@@ -53,8 +54,16 @@ class EmployeeForm(forms.ModelForm):
 
 
 class AssetForm(forms.ModelForm):
-    # Source workbooks sometimes contain license-contact text rather than a strict email address.
-    email = forms.CharField(required=False, label='Email / License Email')
+    movement_date = forms.DateField(
+        label='تاريخ الحركة', required=False, initial=timezone.localdate,
+        widget=forms.DateInput(attrs={'type': 'date'}, format='%Y-%m-%d'),
+        help_text='يُستخدم عند إضافة أصل أو تغيير الموظف/الحالة؛ اتركه فارغًا لاستخدام تاريخ اليوم.',
+    )
+    movement_reason = forms.CharField(
+        label='سبب الحركة / ملاحظات السجل', required=False, max_length=255,
+        widget=forms.TextInput(attrs={'placeholder': 'مثال: تسليم عهدة / نقل موظف / تخريد'}),
+        help_text='يُحفظ مع سجل الحركة إذا تغير الموظف أو الحالة.',
+    )
 
     class Meta:
         model = Asset
