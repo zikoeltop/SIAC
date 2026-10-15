@@ -85,8 +85,8 @@ SHEET_CONFIGS = {
 }
 
 EMPLOYEE_UPDATE_FIELDS = [
-    'name', 'arabic_name', 'company', 'project', 'sector', 'department', 'section',
-    'unit', 'office', 'team', 'position', 'employment_status', 'termination_date', 'updated_at',
+    'name', 'arabic_name', 'company', 'cost_center', 'project', 'sector', 'department', 'section',
+    'unit', 'office', 'team', 'position', 'employment_status', 'hiring_date', 'termination_date', 'updated_at',
 ]
 ASSET_UPDATE_FIELDS = [
     'employee', 'hr_code', 'employee_name', 'asset_type', 'asset_status', 'company', 'project',
@@ -270,10 +270,13 @@ def import_inventory_workbook(uploaded_file, actor=None):
         if not code or not name:
             continue
         termination_date = parse_date(row.get('Termination Date'))
+        hiring_date = parse_date(row.get('Hiring Date')) or parse_date(row.get('Employment Date')) or parse_date(row.get('Contract Start Date'))
         defaults = {
             'name': name,
             'arabic_name': clean_cell(row.get('Arabic Name')),
             'company': '',  # no personal or sensitive HR columns are imported
+            'cost_center': clean_cell(row.get('Cost Center')),
+            'hiring_date': hiring_date,
             'project': clean_cell(row.get('Site')),
             'sector': clean_cell(row.get('Sector')),
             'department': clean_cell(row.get('Department')),

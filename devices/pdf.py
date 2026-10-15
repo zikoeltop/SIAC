@@ -263,7 +263,7 @@ def build_pdf(device):
 
 # --- Employee custody report ---
 def build_custody_pdf(employee, assets, hr_code=None):
-    """Render SIAC's approved one-page custody report with notes and signature fields."""
+    """Build the approved SIAC one-page custody statement (not the device inspection PDF)."""
     from weasyprint import HTML
     from .models import Asset
 
@@ -272,182 +272,239 @@ def build_custody_pdf(employee, assets, hr_code=None):
     regular_font = base_dir / 'static' / 'fonts' / 'NotoSansArabic-Regular.ttf'
     bold_font = base_dir / 'static' / 'fonts' / 'NotoSansArabic-Bold.ttf'
 
-    asset_rows = list(assets)
-    # Keep only current-custody details in this report. Historical 2025/2026 request
-    # sheets are intentionally not presented as active employee assets.
-    asset_rows = [a for a in asset_rows if a.asset_type not in {Asset.Types.NEW_2026, Asset.Types.REQUEST_2025, Asset.Types.SCRAP}]
-
     def val(obj, key, fallback=''):
         if obj is None:
             return fallback
         value = getattr(obj, key, fallback)
         return '' if value is None else str(value).strip()
 
+    def date_text(value):
+        if not value:
+            return 'غير مسجل'
+        try:
+            return value.strftime('%d %b %Y')
+        except Exception:
+            return str(value).strip() or 'غير مسجل'
+
+    def raw(asset, *keys):
+        values = getattr(asset, 'raw_data', {}) or {}
+        for key in keys:
+            value = values.get(key)
+            if value is not None and str(value).strip() and str(value).strip().lower() != 'nan':
+                return str(value).strip()
+        return ''
+
     def esc(value):
-        value = clean_text(value)
-        return html.escape(value, quote=True).replace('\n', '<br>')
+        text = clean_text(value)
+        return html.escape(text, quote=True).replace('\n', '<br>')
 
-    if employee:
-        employee_name = val(employee, 'arabic_name') or val(employee, 'name') or val(employee, 'employee_name')
-        hr_code = val(employee, 'hr_code') or hr_code
+    def field(obj, key, default='-'):
+        return esc(val(obj, key) or default)
+
+    def heading(bilingual_ar, bilingual_en=''):
+        return (f'<div class="section-heading"><strong>{esc(bilingual_ar)}</strong>'
+                f'<span>{esc(bilingual_en)}</span></div>')
+
+    rows = list(assets or [])
+    excluded = {Asset.Types.NEW_2026, Asset.Types.REQUEST_2025, Asset.Types.SCRAP}
+    rows = [a for a in rows if val(a, 'asset_type') not in excluded and val(a, 'asset_status') != Asset.Status.SCRAPPED]
+    computers = [a for a in rows if val(a, 'asset_type') == Asset.Types.COMPUTER]
+    monitors = [a for a in rows if val(a, 'asset_type') == Asset.Types.MONITOR]
+    printers = [a for a in rows if val(a, 'asset_type') == Asset.Types.PRINTER]
+    licenses = [a for a in rows if val(a, 'asset_type') == Asset.Types.GSTAR]
+    others = [a for a in rows if val(a, 'asset_type') == Asset.Types.OTHER]
+
+    employee_name = val(employee, 'name') or next((val(a, 'display_employee_name') for a in rows if val(a, 'display_employee_name') not in ('', '-')), '') or 'غير مسجل'
+    employee_arabic_name = val(employee, 'arabic_name')
+    code = val(employee, 'hr_code') or str(hr_code or '')
+    hiring_date = date_text(getattr(employee, 'hiring_date', None))
+    termination_date = date_text(getattr(employee, 'termination_date', None))
+    cost_center = val(employee, 'cost_center')
+    project = val(employee, 'project') or next((val(a, 'project') for a in rows if val(a, 'project')), '')
+    sector = val(employee, 'sector') or next((val(a, 'sector') for a in rows if val(a, 'sector')), '')
+    department = val(employee, 'department') or next((val(a, 'department') for a in rows if val(a, 'department')), '')
+    position = val(employee, 'position')
+
+    # Tune density to keep the approved statement on one A4 page.
+    total_rows = len(rows)
+    if total_rows <= 5:
+        cell_pad, body_font, notes_height = '1.35mm', '7pt', '23mm'
+    elif total_rows <= 10:
+        cell_pad, body_font, notes_height = '0.95mm', '6.5pt', '17mm'
+    elif total_rows <= 18:
+        cell_pad, body_font, notes_height = '0.6mm', '5.9pt', '10mm'
+    elif total_rows <= 28:
+        cell_pad, body_font, notes_height = '0.35mm', '5.2pt', '5mm'
     else:
-        employee_name = next((val(a, 'display_employee_name') for a in asset_rows if val(a, 'display_employee_name') not in ('', '-')), '')
-    employee_name = employee_name or 'غير مسجل'
-    hr_code = str(hr_code or '')
+        cell_pad, body_font, notes_height = '0.2mm', '4.6pt', '3mm'
 
-    def profile_value(primary, secondary=None):
-        first = val(employee, primary)
-        second = val(employee, secondary) if secondary else ''
-        if primary == 'arabic_name' and not first and not second:
-            first = employee_name
-        if first and second and first.strip() != second.strip():
-            return f'{esc(first)}<span class="subvalue" dir="ltr">{esc(second)}</span>'
-        return esc(first or second or '-')
-
-    def field_value(attribute, asset_attribute=None):
-        value = val(employee, attribute)
-        if not value and asset_attribute and asset_rows:
-            value = val(asset_rows[0], asset_attribute)
-        return esc(value or '-')
-
-    type_labels = {
-        Asset.Types.COMPUTER: 'كمبيوتر',
-        Asset.Types.PRINTER: 'طابعة',
-        Asset.Types.MONITOR: 'شاشة',
-        Asset.Types.GSTAR: 'ترخيص GStar CAD',
-        Asset.Types.OTHER: 'أصل آخر',
-    }
-    status_labels = {
-        Asset.Status.ACTIVE: 'عهدة نشطة',
-        Asset.Status.PENDING: 'معلق',
-        Asset.Status.SCRAPPED: 'مخرد',
-        Asset.Status.ARCHIVED: 'مؤرشف',
-    }
-
-    asset_html = []
-    for asset in asset_rows:
-        kind = val(asset, 'item_type')
-        brand = val(asset, 'brand')
-        model = val(asset, 'model')
-        description_parts = [part for part in (kind, brand, model) if part]
-        description = ' | '.join(description_parts)
-        specs = []
-        if val(asset, 'processor'):
-            specs.append(val(asset, 'processor'))
-        if val(asset, 'ram'):
-            specs.append('RAM ' + val(asset, 'ram'))
-        if val(asset, 'storage'):
-            specs.append(val(asset, 'storage'))
-        if specs:
-            description = (description + ' - ' if description else '') + ' / '.join(specs)
-        serial = val(asset, 'serial_number') or '-'
-        computer_name = val(asset, 'computer_name_new') or val(asset, 'computer_name') or '-'
-        asset_type = type_labels.get(val(asset, 'asset_type'), val(asset, 'asset_type')) or '-'
-        status = status_labels.get(val(asset, 'asset_status'), val(asset, 'asset_status')) or '-'
-        asset_html.append(
-            '<tr>'
-            f'<td>{esc(asset_type)}</td>'
-            f'<td class="eng">{esc(serial)}</td>'
-            f'<td class="eng">{esc(computer_name)}</td>'
-            f'<td dir="auto">{esc(description or "-")}</td>'
-            f'<td>{esc(status)}</td>'
-            '</tr>'
+    def asset_specs(asset):
+        specs = [
+            ('المعالج / Processor', val(asset, 'processor')),
+            ('الذاكرة / RAM', val(asset, 'ram')),
+            ('التخزين / HDD', val(asset, 'storage')),
+        ]
+        return ''.join(
+            f'<div class="spec"><span>{esc(label)}</span><b>{esc(value or "غير مسجل")}</b></div>'
+            for label, value in specs
         )
 
-    if not asset_html:
-        asset_html.append('<tr><td colspan="5" class="no-assets">لا توجد أصول نشطة مسجلة على هذا الموظف.</td></tr>')
+    computer_rows = []
+    for a in computers:
+        computer_name = val(a, 'computer_name_new') or val(a, 'computer_name') or raw(a, 'Computer Name New', 'Computer Name') or '-'
+        computer_rows.append(
+            '<tr>'
+            f'<td>{esc(computer_name)}</td>'
+            f'<td>{field(a, "item_type")}</td>'
+            f'<td>{field(a, "brand")}</td>'
+            f'<td>{field(a, "model")}</td>'
+            f'<td class="eng">{field(a, "serial_number")}</td>'
+            f'<td class="eng">{field(a, "manufacturing_year")}</td>'
+            '</tr>'
+            f'<tr class="spec-row"><td colspan="6"><div class="spec-grid">{asset_specs(a)}</div></td></tr>'
+        )
+    if not computer_rows:
+        computer_rows.append('<tr><td colspan="6" class="empty">لا توجد أجهزة كمبيوتر مسجلة على عهدة الموظف.</td></tr>')
 
-    # Keep the large note-taking area for ordinary reports and compact the table
-    # when an employee has many items so common cases remain on one A4 page.
-    count = len(asset_rows)
-    if count <= 4:
-        row_padding, table_font, notes_height = '1.8mm', '7.4pt', 73
-    elif count <= 8:
-        row_padding, table_font, notes_height = '1.25mm', '7pt', 58
-    elif count <= 12:
-        row_padding, table_font, notes_height = '0.95mm', '6.6pt', 43
-    elif count <= 18:
-        row_padding, table_font, notes_height = '0.7mm', '6.1pt', 28
-    elif count <= 25:
-        row_padding, table_font, notes_height = '0.45mm', '5.7pt', 16
-    else:
-        row_padding, table_font, notes_height = '0.35mm', '5.2pt', 8
+    monitor_rows = []
+    for a in monitors:
+        monitor_rows.append(
+            '<tr>'
+            f'<td>{esc(raw(a, "Name", "Computer Name") or val(a, "computer_name_new") or val(a, "computer_name") or val(a, "item_type") or "-")}</td>'
+            f'<td>{field(a, "brand")}</td>'
+            f'<td>{esc(raw(a, "Model") or val(a, "model") or "-")}</td>'
+            f'<td class="eng">{esc(raw(a, "Size") or val(a, "item_type") or "-")}</td>'
+            f'<td class="eng">{field(a, "serial_number")}</td>'
+            f'<td class="eng">{esc(raw(a, "Asset Number") or val(a, "asset_tag") or "—")}</td>'
+            '</tr>'
+        )
+    if not monitor_rows:
+        monitor_rows.append('<tr><td colspan="6" class="empty">لا توجد شاشات مسجلة على عهدة الموظف.</td></tr>')
+
+    license_rows = []
+    for a in licenses:
+        license_key = raw(a, 'Gstar PRO', 'License Key') or val(a, 'model') or val(a, 'item_type') or '-'
+        license_rows.append(
+            '<tr>'
+            f'<td class="eng">{field(a, "serial_number")}</td>'
+            f'<td class="eng">{esc(raw(a, "Version") or val(a, "license_version") or "-")}</td>'
+            f'<td class="eng">{esc(raw(a, "Activated") or val(a, "license_activated") or "-")}</td>'
+            f'<td class="eng license-key">{esc(license_key)}</td>'
+            f'<td class="eng">{esc(raw(a, "Email to send License") or val(a, "email") or "—")}</td>'
+            '</tr>'
+        )
+    if not license_rows:
+        license_rows.append('<tr><td colspan="5" class="empty">لا توجد تراخيص GStar CAD مسجلة على عهدة الموظف.</td></tr>')
+
+    printer_list = ''.join(
+        f'<div class="printer-line">{esc(val(a, "computer_name_new") or val(a, "computer_name") or val(a, "item_type") or "طابعة")} — '
+        f'<span dir="ltr">{esc(val(a, "serial_number") or "-")}</span></div>' for a in printers
+    )
+    printer_message = printer_list if printers else 'لا توجد طابعات مسجلة على عهدة الموظف.'
+    other_rows = []
+    for a in others:
+        label = val(a, 'item_type') or val(a, 'model') or 'أصل آخر'
+        other_rows.append(f'<div class="printer-line">{esc(label)} — <span dir="ltr">{esc(val(a, "serial_number") or "-")}</span></div>')
+    other_html = '<div class="other-extra">' + ''.join(other_rows) + '</div>' if other_rows else ''
 
     logo_uri = logo_path.as_uri() if logo_path.exists() else ''
-    # The build script downloads these fonts on Railway; the system font paths are
-    # a local testing fallback and are not included in the project ZIP.
     fallback_regular = Path('/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf')
     fallback_bold = Path('/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf')
     font_regular_uri = (regular_font if regular_font.exists() else fallback_regular).as_uri()
     font_bold_uri = (bold_font if bold_font.exists() else fallback_bold).as_uri()
-    company = val(employee, 'company') or (val(asset_rows[0], 'company') if asset_rows else '') or 'سياك للإنشاءات'
-    project = field_value('project', 'project')
-    sector = field_value('sector', 'sector')
-    department = field_value('department', 'department')
-    position = field_value('position')
-    employment_status = field_value('employment_status')
 
-    document = f'''<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8">
-<style>
-@font-face {{ font-family: NotoArabic; src: url("{font_regular_uri}"); font-weight: 400; }}
-@font-face {{ font-family: NotoArabic; src: url("{font_bold_uri}"); font-weight: 700; }}
-@page {{ size: A4; margin: 9mm 10mm 10mm 10mm; }}
-* {{ box-sizing: border-box; }}
-body {{ font-family: NotoArabic, sans-serif; color: #18273a; font-size: 8.5pt; direction: rtl; margin: 0; }}
-.header {{ display:flex; flex-direction:row; justify-content:space-between; align-items:center; border-bottom:2px solid #1f8a8a; padding:0 0 4mm; margin-bottom:4mm; min-height:24mm; }}
-.logo {{ width:29mm; height:24mm; object-fit:contain; }}
-.company {{ text-align:right; color:#17365d; line-height:1.55; font-size:10pt; font-weight:700; }}
-.subline {{ font-weight:400; font-size:8.7pt; color:#344b68; }}
-.title {{ text-align:center; font-size:17pt; font-weight:700; color:#17365d; margin:1mm 0 0; line-height:1.3; }}
-.subtitle {{ font:bold 8.5pt Arial,sans-serif; direction:ltr; text-align:center; color:#1f8a8a; letter-spacing:.8px; margin:1mm 0 4mm; }}
-table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
-.profile {{ margin-bottom:4mm; }}
-.profile td {{ border:.4pt solid #cad5e2; padding:2mm 2.2mm; vertical-align:middle; overflow-wrap:anywhere; font-size:7.8pt; line-height:1.25; }}
-.profile .label {{ width:16%; background:#f0f5fa; color:#526174; font-weight:700; }}
-.profile .value {{ width:34%; }}
-.subvalue {{ display:block; direction:ltr; font:7pt Arial,sans-serif; color:#526174; margin-top:1px; text-align:right; }}
-.section-title {{ color:#17365d; font-size:10pt; font-weight:700; margin:2mm 0 2mm; }}
-.assets th {{ color:#17365d; background:#eaf2f5; font-weight:700; padding:2mm 1.5mm; font-size:7.1pt; border:.4pt solid #cad5e2; }}
-.assets td {{ padding:{row_padding} 1.5mm; border:.4pt solid #cad5e2; vertical-align:middle; text-align:right; line-height:1.25; overflow-wrap:anywhere; font-size:{table_font}; }}
-.assets tbody tr:nth-child(even) td {{ background:#f7fafd; }}
-.assets td.eng, .assets th.eng {{ direction:ltr; text-align:center; font-family:Arial,sans-serif; }}
-.assets .type {{ width:13%; }} .assets .serial {{ width:18%; }} .assets .computer {{ width:21%; }} .assets .description {{ width:32%; }} .assets .status {{ width:16%; }}
-.no-assets {{ text-align:center!important; color:#526174; padding:4mm!important; }}
-.notes-title {{ margin-top:4mm; margin-bottom:1.5mm; color:#17365d; font-size:10pt; font-weight:700; }}
-.notes-box {{ border:.7pt solid #cad5e2; border-radius:2mm; height:{notes_height}mm; background:#fff; }}
-.footer {{ position:fixed; bottom:0; left:0; right:0; border-top:1.1pt solid #1f8a8a; padding-top:3mm; height:23mm; color:#18273a; background:white; }}
-.footerrow {{ display:flex; justify-content:space-between; gap:8mm; margin-bottom:3.2mm; }}
-.footeritem {{ flex:1; white-space:nowrap; font-size:8.3pt; }}
-.sign {{ width:55%; }}
-</style>
-</head>
-<body>
-<header class="header">
-  <div class="company">الشركة الهندسية للصناعات والتشييد (سياك)<br><span class="subline">إدارة الحاسب الآلي ونظم المعلومات</span></div>
-  {f'<img class="logo" src="{logo_uri}" alt="SIAC Construction">' if logo_uri else ''}
-</header>
-<div class="title">بيان عهدة الموظف</div>
-<div class="subtitle">EMPLOYEE CUSTODY REPORT</div>
-<table class="profile"><tbody>
-<tr><td class="label">كود الموظف / HR ID</td><td class="value labelen" dir="ltr">{esc(hr_code or '-')}</td><td class="label">اسم الموظف / Employee Name</td><td class="value" dir="auto">{profile_value('arabic_name', 'name')}</td></tr>
-<tr><td class="label">المشروع / Project</td><td class="value" dir="auto">{project}</td><td class="label">القطاع / Sector</td><td class="value" dir="auto">{sector}</td></tr>
-<tr><td class="label">الإدارة / Department</td><td class="value" dir="auto">{department}</td><td class="label">الوظيفة / Position</td><td class="value" dir="auto">{position}</td></tr>
-<tr><td class="label">الشركة / Company</td><td class="value" dir="auto">{esc(company)}</td><td class="label">حالة الموظف / Status</td><td class="value" dir="auto">{employment_status}</td></tr>
-</tbody></table>
-<div class="section-title">تفاصيل الأصول المسجلة على الموظف <span style="font:700 7.5pt Arial,sans-serif; color:#7890a2;">ASSET DETAILS</span></div>
-<table class="assets"><thead><tr><th class="type">نوع الأصل</th><th class="serial eng">Serial Number</th><th class="computer eng">Computer Name New</th><th class="description">الوصف / الموديل</th><th class="status">الحالة</th></tr></thead>
-<tbody>{''.join(asset_html)}</tbody></table>
-<div class="notes-title">ملاحظات <span style="font:700 7.5pt Arial,sans-serif; color:#7890a2;">NOTES</span></div>
+    doc = f'''<!doctype html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><style>
+@font-face {{font-family:NotoArabic;src:url("{font_regular_uri}");font-weight:400;}}
+@font-face {{font-family:NotoArabic;src:url("{font_bold_uri}");font-weight:700;}}
+@page {{size:A4;margin:6.5mm 7.5mm 7mm 7.5mm;}}
+* {{box-sizing:border-box;}}
+body {{font-family:NotoArabic,sans-serif;color:#203447;font-size:7.15pt;line-height:1.25;margin:0;direction:rtl;}}
+.header {{direction:ltr;display:flex;justify-content:space-between;align-items:center;border-bottom:2.2pt solid #1f8987;padding-bottom:2.2mm;margin-bottom:2.2mm;min-height:20mm;}}
+.logo {{width:27mm;height:20mm;object-fit:contain;}}
+.company {{text-align:right;color:#173e56;font-weight:700;font-size:9.7pt;line-height:1.5;}}
+.company small {{display:block;font-weight:400;font-size:7.5pt;color:#627887;}}
+.titlebar {{display:flex;justify-content:space-between;align-items:center;background:#173f58;color:white;border-radius:1.6mm;padding:2mm 3mm;margin:0 0 2.2mm;min-height:13mm;}}
+.titlebar .main-title {{font-size:12.4pt;font-weight:700;line-height:1.25;}}
+.titlebar .english {{font:7.2pt Arial,sans-serif;direction:ltr;text-align:right;letter-spacing:.35px;color:#c1d2d8;margin-top:.6mm;}}
+.internal {{background:#e0f3f1;color:#287f7d;border-radius:4mm;padding:1.15mm 2.4mm;font-size:6.2pt;font-weight:700;white-space:nowrap;}}
+.section-heading {{display:flex;justify-content:space-between;align-items:center;margin:1.4mm 0 1mm;color:#173f58;font-size:8.4pt;font-weight:700;}}
+.section-heading span {{font:6.2pt Arial,sans-serif;direction:ltr;color:#91a4af;letter-spacing:.35px;}}
+.profile {{display:grid;grid-template-columns:1fr 1.9fr;gap:1.2mm;margin-bottom:1.8mm;}}
+.profile-box {{border:.45pt solid #d6e0e7;border-radius:1.7mm;padding:1.55mm 2mm;min-height:10mm;display:flex;flex-direction:column;justify-content:space-between;}}
+.profile-row {{display:grid;gap:1.2mm;margin-bottom:1.2mm;}}
+.profile-row.two {{grid-template-columns:1fr 1fr;}}
+.profile-row.three {{grid-template-columns:1fr 1fr 1fr;}}
+.label {{font-size:6.15pt;color:#8798a5;line-height:1.2;}}
+.value {{font-size:7.55pt;color:#273b4d;font-weight:700;overflow-wrap:anywhere;margin-top:1mm;}}
+.value.ltr {{direction:ltr;text-align:right;font-family:Arial,sans-serif;}}
+.assets {{width:100%;border-collapse:collapse;table-layout:fixed;margin-bottom:1.2mm;}}
+.assets th {{background:#eaf2f5;color:#29485c;font-weight:700;font-size:6.2pt;line-height:1.15;padding:{cell_pad} 1mm;border:.4pt solid #d0dce3;vertical-align:middle;}}
+.assets td {{font-size:{body_font};line-height:1.2;padding:{cell_pad} 1mm;border:.4pt solid #d0dce3;vertical-align:middle;overflow-wrap:anywhere;text-align:center;}}
+.assets tbody tr:nth-child(odd) td {{background:#fff;}}
+.assets tbody tr:nth-child(even) td {{background:#f8fbfd;}}
+.assets .eng {{direction:ltr;font-family:Arial,sans-serif;text-align:center;}}
+.assets .empty {{padding:2mm;text-align:center;color:#728592;}}
+.spec-row td {{background:#f4f8fa!important;padding:.7mm 1mm!important;}}
+.spec-grid {{display:grid;grid-template-columns:repeat(3,1fr);gap:1mm;}}
+.spec {{display:flex;justify-content:space-between;gap:1mm;white-space:normal;}}
+.spec span {{color:#8294a0;font-size:5.7pt;}}
+.spec b {{font-weight:700;font-size:6pt;}}
+.computers col:nth-child(1) {{width:18%;}} .computers col:nth-child(2) {{width:12%;}} .computers col:nth-child(3) {{width:11%;}} .computers col:nth-child(4) {{width:19%;}} .computers col:nth-child(5) {{width:23%;}} .computers col:nth-child(6) {{width:17%;}}
+.monitors col:nth-child(1) {{width:20%;}} .monitors col:nth-child(2) {{width:12%;}} .monitors col:nth-child(3) {{width:16%;}} .monitors col:nth-child(4) {{width:8%;}} .monitors col:nth-child(5) {{width:28%;}} .monitors col:nth-child(6) {{width:16%;}}
+.licenses col:nth-child(1) {{width:15%;}} .licenses col:nth-child(2) {{width:10%;}} .licenses col:nth-child(3) {{width:11%;}} .licenses col:nth-child(4) {{width:44%;}} .licenses col:nth-child(5) {{width:20%;}}
+.other-box {{border:.45pt dashed #d6e0e7;border-radius:1.6mm;background:#f7fafb;padding:1.5mm 2mm;margin-bottom:1.3mm;}}
+.printer-head {{display:flex;align-items:center;justify-content:space-between;font-weight:700;font-size:6.8pt;color:#40586a;}}
+.count {{background:#e4f4f2;color:#24827e;border-radius:1.4mm;padding:1mm 3mm;font-size:8pt;font-weight:700;min-width:9mm;text-align:center;}}
+.printer-message {{font-size:6.2pt;color:#7b8d99;margin-top:.7mm;}}
+.printer-line {{font-size:6.1pt;color:#536979;margin-top:.6mm;}}
+.notes-title {{margin:1.5mm 0 1mm;font-size:8.4pt;font-weight:700;color:#173f58;}}
+.notes-box {{border:.55pt solid #d4dfe7;border-radius:1.7mm;height:{notes_height};background:linear-gradient(to bottom,transparent calc(100% - .35pt),#e6edf1 calc(100% - .35pt)) 0 0/100% 8mm repeat-y;}}
+.footer {{border-top:2.2pt solid #1f8987;padding-top:2mm;margin-top:2mm;}}
+.footer-row {{display:flex;gap:2mm;margin-bottom:1.4mm;}}
+.footer-item {{flex:1;border:.45pt solid #d6e0e7;border-radius:1.5mm;min-height:8.5mm;padding:1.8mm 2mm;font-size:6.8pt;color:#455f70;display:flex;justify-content:space-between;align-items:center;gap:1mm;}}
+.footer-item .dots {{color:#8a9ba6;white-space:nowrap;}}
+.signature {{min-height:8mm;}}
+.bottomline {{display:flex;justify-content:space-between;border-top:.4pt solid #e0e7ec;padding-top:1.2mm;margin-top:.5mm;color:#9aaab4;font-size:5.4pt;}}
+.bottomline .eng {{font:5.4pt Arial,sans-serif;direction:ltr;}}
+</style></head><body>
+<header class="header"><img class="logo" src="{logo_uri}" alt="SIAC Construction"><div class="company">الشركة الهندسية للصناعات والتشييد (سياك)<small>إدارة الحاسب الآلي ونظم المعلومات</small></div></header>
+<div class="titlebar"><div><div class="main-title">بيان عهدة الموظف والأصول المسجلة</div><div class="english">EMPLOYEE ASSET CUSTODY REPORT</div></div><span class="internal">للاستخدام الداخلي</span></div>
+{heading('بيانات الموظف', 'EMPLOYEE INFORMATION')}
+<div class="profile">
+  <div class="profile-box"><div class="label">كود الموظف / HR ID</div><div class="value ltr">{esc(code or '-')}</div></div>
+  <div class="profile-box"><div class="label">اسم الموظف / Employee Name</div><div class="value ltr">{esc(employee_name)}</div>{f'<div class="label">{esc(employee_arabic_name)}</div>' if employee_arabic_name else ''}</div>
+</div>
+<div class="profile-row two">
+ <div class="profile-box"><div class="label">الوظيفة / Position</div><div class="value">{esc(position or '-')}</div></div>
+ <div class="profile-box"><div class="label">القطاع / Sector</div><div class="value">{esc(sector or '-')}</div></div>
+</div>
+<div class="profile-row three">
+ <div class="profile-box"><div class="label">المشروع / الموقع / Project / Site</div><div class="value">{esc(project or '-')}</div></div>
+ <div class="profile-box"><div class="label">الإدارة / Department</div><div class="value">{esc(department or '-')}</div></div>
+ <div class="profile-box"><div class="label">مركز التكلفة / Cost Center</div><div class="value">{esc(cost_center or '-')}</div></div>
+</div>
+<div class="profile-row two">
+ <div class="profile-box"><div class="label">تاريخ التعيين / Hiring Date</div><div class="value ltr">{esc(hiring_date)}</div></div>
+ <div class="profile-box"><div class="label">تاريخ انتهاء الخدمة / Termination Date</div><div class="value">{esc(termination_date)}</div></div>
+</div>
+{heading('أجهزة الكمبيوتر واللاب توب ومحطات العمل', f'COMPUTERS / LAPTOPS / WORKSTATIONS · {len(computers)}')}
+<table class="assets computers"><colgroup><col><col><col><col><col><col></colgroup><thead><tr><th>اسم الجهاز<br>Computer Name</th><th>النوع<br>Type</th><th>الماركة<br>Brand</th><th>الموديل<br>Model</th><th class="eng">Serial Number</th><th>سنة الصنع<br>Mfg Year</th></tr></thead><tbody>{''.join(computer_rows)}</tbody></table>
+{heading('الشاشات', f'MONITORS · {len(monitors)}')}
+<table class="assets monitors"><colgroup><col><col><col><col><col><col></colgroup><thead><tr><th>اسم الشاشة<br>Name</th><th>الماركة<br>Brand</th><th>الموديل<br>Model</th><th>المقاس<br>Size</th><th class="eng">Serial Number</th><th>رقم الأصل<br>Asset No.</th></tr></thead><tbody>{''.join(monitor_rows)}</tbody></table>
+{heading('تراخيص GStar CAD', f'GSTAR CAD LICENSES · {len(licenses)}')}
+<table class="assets licenses"><colgroup><col><col><col><col><col></colgroup><thead><tr><th>الجهاز<br>Computer SN</th><th>الإصدار<br>Version</th><th>التفعيل<br>Activated</th><th>مفتاح الترخيص<br>License Key</th><th>البريد الإلكتروني<br>Email</th></tr></thead><tbody>{''.join(license_rows)}</tbody></table>
+{heading('بنود أخرى', 'OTHER CUSTODY RECORDS')}
+<div class="other-box"><div class="printer-head"><span>الطابعات / Printers</span><span class="count">{len(printers)}</span></div><div class="printer-message">{printer_message}</div>{other_html}</div>
+<div class="notes-title">ملاحظات <span style="font:6.2pt Arial,sans-serif;direction:ltr;color:#91a4af;">NOTES</span></div>
 <div class="notes-box"></div>
 <div class="footer">
-  <div class="footerrow"><div class="footeritem">اسم مسئول الدعم الفني : ......................................</div><div class="footeritem">تاريخ التقرير : ................................................</div></div>
-  <div class="footerrow"><div class="footeritem sign">توقيع المستخدم : ......................................</div></div>
-  <div style="display:flex;justify-content:space-between;border-top:.4pt solid #dce5ec;padding-top:1.5mm;margin-top:1mm;color:#9aabb8;font-size:6.5pt;"><span>بيان عهدة الموظف</span><span style="font-family:Arial,sans-serif;direction:ltr;">SIAC • INTERNAL DOCUMENT</span><span>إدارة الحاسب الآلي ونظم المعلومات</span></div>
+ <div class="footer-row"><div class="footer-item"><span>تاريخ التقرير :</span><span class="dots">................................................</span></div><div class="footer-item"><span>اسم مسئول الدعم الفني :</span><span class="dots">......................................</span></div></div>
+ <div class="footer-row"><div class="footer-item signature"><span>توقيع المستخدم :</span><span class="dots">......................................</span></div></div>
+ <div class="bottomline"><span>بيان عهدة الموظف</span><span class="eng">SIAC · INTERNAL DOCUMENT</span><span>إدارة الحاسب الآلي ونظم المعلومات</span></div>
 </div>
 </body></html>'''
 
-    pdf_bytes = HTML(string=document, base_url=str(base_dir)).write_pdf()
+    pdf_bytes = HTML(string=doc, base_url=str(base_dir)).write_pdf()
     return io.BytesIO(pdf_bytes)
+

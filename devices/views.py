@@ -1,6 +1,6 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Q, Count, F
+from django.db.models import Q, Count, F, Prefetch
 from django.http import FileResponse, HttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
@@ -101,12 +101,24 @@ def _record_asset_movement(request, after, form, before=None):
 
 
 def _movement_history_groups(assets):
+    """Group movement rows without triggering one extra SQL query per asset."""
     groups = []
     for asset in assets:
-        movements = list(asset.movements.select_related('from_employee', 'to_employee', 'created_by').order_by(F('effective_date').asc(nulls_first=True), 'created_at', 'id'))
+        cached = getattr(asset, '_prefetched_objects_cache', {}).get('movements')
+        if cached is not None:
+            movements = list(cached)
+        else:
+            movements = list(asset.movements.select_related('from_employee', 'to_employee', 'created_by').order_by(F('effective_date').asc(nulls_first=True), 'created_at', 'id'))
         if movements:
             groups.append({'asset': asset, 'movements': movements})
     return groups
+
+
+def _with_movement_history(queryset):
+    ordered_movements = AssetMovement.objects.select_related(
+        'from_employee', 'to_employee', 'created_by'
+    ).order_by(F('effective_date').asc(nulls_first=True), 'created_at', 'id')
+    return queryset.prefetch_related(Prefetch('movements', queryset=ordered_movements))
 
 
 def _omit_duplicate_scrap_rows(assets):
@@ -150,6 +162,7 @@ def search_device(request):
         matched_assets = list(Asset.objects.filter(serial_number__iexact=serial).select_related('employee').order_by('source_sheet', 'id'))
         if matched_assets:
             history_assets = _omit_duplicate_scrap_rows(matched_assets)
+            history_assets = list(_with_movement_history(Asset.objects.filter(pk__in=[a.pk for a in history_assets]).select_related('employee').order_by('source_sheet', 'id')))
         if not matched_assets:
             legacy_device = Device.objects.filter(serial_number__iexact=serial).first()
         codes = []
@@ -181,9 +194,9 @@ def search_device(request):
         movement_asset_ids = AssetMovement.objects.filter(
             Q(from_hr_code__iexact=hr_code) | Q(to_hr_code__iexact=hr_code)
         ).values_list('asset_id', flat=True).distinct()
-        history_assets = list(Asset.objects.filter(
+        history_assets = list(_with_movement_history(Asset.objects.filter(
             Q(pk__in=movement_asset_ids) | Q(hr_code__iexact=hr_code)
-        ).select_related('employee').distinct().order_by('asset_type', 'serial_number', 'id'))
+        ).select_related('employee').distinct().order_by('asset_type', 'serial_number', 'id')))
         history_assets = _omit_duplicate_scrap_rows(history_assets)
         found = bool(employee or matched_assets or history_assets)
         log_event(request.user, 'ASSET_SEARCH', request, f'Searched HR Code {hr_code}; found={found}; assets={len(matched_assets)}; history={len(history_assets)}')

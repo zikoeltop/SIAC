@@ -52,3 +52,9 @@ py manage.py runserver
 ## Custody PDF
 
 The employee custody PDF uses WeasyPrint for correct Arabic/English bidirectional rendering. `railpack.json` adds the required Linux runtime libraries, and `build.sh` downloads Noto Sans Arabic Regular/Bold during the build (font files are not committed to the repository). The report remains on one A4 page, omits the 2025 requests and 2026 new-hires categories, and provides a blank notes area before the date/support/signature footer.
+
+## Update v9 - Approved custody PDF & HR search efficiency
+- The custody PDF now follows the user-approved sample layout: SIAC logo at top-left; company and IT department at top-right; employee information cards; separate computer, monitor, and GStar tables; only printers in Other Custody Records; a blank Notes area and the support/date/signature footer. It intentionally omits Asset Summary, 2025 issue/purchase requests, and 2026 new assignments.
+- `Employee` now stores `Cost Center` and `Hiring Date` because both appear in the approved report. Migration `0006_employee_report_fields` adds these nullable/blank fields without deleting existing records.
+- Import maps `Cost Center` and `Hiring Date` from the ID worksheet (falling back to Employment Date or Contract Start Date only if Hiring Date is blank). Re-import the same workbook after deployment to populate these two new fields; the importer updates by HR Code and source sheet/row and retains manual entries.
+- HR search now prefetches movement histories in batches rather than querying movements separately for every matched asset, reducing the chance of a slow request while rendering employee history.

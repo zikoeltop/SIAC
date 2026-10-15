@@ -18,10 +18,10 @@ WHITE = 'FFFFFF'
 
 EMPLOYEE_COLUMNS = [
     ('HR Code', 'hr_code'), ('Employee Name', 'name'), ('Arabic Name', 'arabic_name'),
-    ('Company', 'company'), ('Project / Site', 'project'), ('Sector', 'sector'),
+    ('Company', 'company'), ('Cost Center', 'cost_center'), ('Project / Site', 'project'), ('Sector', 'sector'),
     ('Department', 'department'), ('Section', 'section'), ('Unit', 'unit'),
     ('Office', 'office'), ('Team', 'team'), ('Position', 'position'),
-    ('Employment Status', 'employment_status'), ('Termination Date', 'termination_date'),
+    ('Employment Status', 'employment_status'), ('Hiring Date', 'hiring_date'), ('Termination Date', 'termination_date'),
 ]
 ASSET_COLUMNS = [
     ('HR Code', 'hr_code'), ('Employee Name', 'employee_name'), ('Asset Type', 'get_asset_type_display'),

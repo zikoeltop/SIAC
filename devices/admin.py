@@ -13,8 +13,8 @@ from .models import Asset, Employee
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
-    list_display = ('hr_code', 'name', 'project', 'department', 'position', 'employment_status')
-    search_fields = ('hr_code', 'name', 'arabic_name', 'project', 'department')
+    list_display = ('hr_code', 'name', 'cost_center', 'project', 'department', 'position', 'hiring_date', 'employment_status')
+    search_fields = ('hr_code', 'name', 'arabic_name', 'cost_center', 'project', 'department')
     list_filter = ('sector', 'department', 'employment_status')
 
 @admin.register(Asset)

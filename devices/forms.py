@@ -34,11 +34,12 @@ class EmployeeForm(forms.ModelForm):
     class Meta:
         model = Employee
         fields = [
-            'hr_code', 'name', 'arabic_name', 'company', 'project', 'sector',
+            'hr_code', 'name', 'arabic_name', 'company', 'cost_center', 'project', 'sector',
             'department', 'section', 'unit', 'office', 'team', 'position',
-            'employment_status', 'termination_date',
+            'employment_status', 'hiring_date', 'termination_date',
         ]
         widgets = {
+            'hiring_date': forms.DateInput(attrs={'type': 'date'}, format='%Y-%m-%d'),
             'termination_date': forms.DateInput(attrs={'type': 'date'}, format='%Y-%m-%d'),
             'arabic_name': forms.TextInput(attrs={'dir': 'rtl'}),
         }
