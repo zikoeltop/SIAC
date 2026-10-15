@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><p class="eyebrow">ADMIN · MASTER DATA</p><h1>استيراد الملف المرجعي</h1><p>راجع عدد الموظفين وسجلات الأصول المتوقع استيرادها أولًا، ثم اعتمد عملية التحديث.</p></div>
+<div class="card import-card">
+  <div class="notice"><b>قبل الاستيراد:</b> سيقرأ النظام شيت <code>ID</code> وقوائم الأصول مثل <code>all</code> و<code>Printers 2027</code> و<code>Monitors 2</code> و<code>GStar</code> والتعيينات والطلبات والتخريد. يتم الاحتفاظ بالأعمدة الأصلية المساندة في بيانات المصدر للتصدير لاحقًا.</div>
+  <ul class="import-points"><li>يتم تحديث الموظف حسب HR Code.</li><li>يتم تحديث الأصل المستورد حسب اسم الشيت ورقم الصف.</li><li>لن تُحذف الأصول المضافة يدويًا من الموقع.</li><li>لا يستورد النظام الرقم القومي أو الدين أو تاريخ الميلاد أو بيانات التأمين الصحي.</li><li>السيريال المكرر لا يمنع الاستيراد؛ لأن نفس القيمة قد تظهر في أكثر من سجل أو شيت.</li></ul>
+  <form method="post" enctype="multipart/form-data" class="upload-form">{% csrf_token %}<div class="field"><label for="id_workbook">{{ form.workbook.label }}</label>{{ form.workbook }}<small class="help-text">{{ form.workbook.help_text }}</small>{% for error in form.workbook.errors %}<small class="error-text">{{ error }}</small>{% endfor %}</div><button type="submit" class="button">عرض معاينة الملف</button></form>
+</div>{% endblock %}

@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><p class="eyebrow">ADMIN · EMPLOYEE RECORD</p><h1>{{ title }}</h1><p>استخدم HR Code كما هو موجود في ملف العهدة لربط الموظف بأصوله.</p></div>
+<div class="card form-card"><form method="post">{% csrf_token %}{% if form.non_field_errors %}<div class="msg error">{{ form.non_field_errors }}</div>{% endif %}<div class="form-grid">
+{% for field in form %}<div class="field {% if field.name == 'arabic_name' or field.name == 'position' %}wide{% endif %}"><label for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} <span class="required">*</span>{% endif %}</label>{{ field }}{% if field.help_text %}<small class="help-text">{{ field.help_text }}</small>{% endif %}{% for error in field.errors %}<small class="error-text">{{ error }}</small>{% endfor %}</div>{% endfor %}
+</div><div class="form-actions"><button class="button" type="submit">حفظ البيانات</button><a class="button ghost" href="{% url 'employee_list' %}">إلغاء</a></div></form></div>{% endblock %}

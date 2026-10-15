@@ -3,8 +3,10 @@ from django.db import models
 
 class AuditLog(models.Model):
     ACTIONS = [
-        ('LOGIN','Login'),('LOGOUT','Logout'),('DEVICE_SEARCH','Device search'),
-        ('PDF_DOWNLOAD','PDF download'),('EXCEL_IMPORT','Excel import'),
+        ('LOGIN','Login'),('LOGOUT','Logout'),('DEVICE_SEARCH','Device search'),('ASSET_SEARCH','Asset search'),
+        ('PDF_DOWNLOAD','PDF download'),('CUSTODY_PDF_DOWNLOAD','Custody PDF download'),('EXCEL_IMPORT','Excel import'),
+        ('INVENTORY_PREVIEW','Inventory import preview'),('INVENTORY_IMPORT','Inventory import'),('INVENTORY_EXPORT','Inventory export'),
+        ('EMPLOYEE_CREATE','Employee create'),('EMPLOYEE_EDIT','Employee edit'),('ASSET_CREATE','Asset create'),('ASSET_EDIT','Asset edit'),
         ('USER_CREATE','User create'),('USER_EDIT','User edit'),('USER_DELETE','User delete'),
         ('PASSWORD_CHANGE','Password change'),('PASSWORD_RESET','Password reset'),
     ]

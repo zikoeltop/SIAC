@@ -1,0 +1,9 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><p class="eyebrow">ADMIN · REVIEW BEFORE IMPORT</p><h1>مراجعة استيراد المخزون</h1><p>راجع ملخص الملف قبل الكتابة في قاعدة بيانات SIAC. لم يتم حفظ بيانات المخزون حتى الآن.</p></div>
+<div class="card">
+  <div class="details-grid"><div><small>اسم الملف</small><b>{{ summary.file_name }}</b></div><div><small>الموظفون المتوقع استيرادهم</small><b>{{ summary.employees }}</b></div><div><small>سجلات الأصول المتوقعة</small><b>{{ summary.total_assets }}</b></div></div>
+  <h2 class="subheading">عدد السجلات حسب الشيت</h2>
+  <div class="table-wrap"><table><thead><tr><th>اسم الشيت</th><th>سجلات الأصول التي ستتم قراءتها</th></tr></thead><tbody>{% for name,count in summary.assets.items %}<tr><td>{{ name }}</td><td>{{ count }}</td></tr>{% empty %}<tr><td colspan="2" class="empty-cell">لم يتم التعرف على سجلات أصول في الشيتات المدعومة.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="notice"><b>تذكير:</b> الاعتماد سيُحدّث الموظفين حسب HR Code، والأصول المستوردة حسب اسم الشيت ورقم الصف. لن يتم حذف الأصول التي أُضيفت يدويًا. يمكن أن يختلف عدد السجلات النهائية عن عدد الصفوف الإجمالي بسبب تجاهل الصفوف الفارغة أو غير المحتوية على بيانات أصل.</div>
+  <div class="form-actions"><form method="post">{% csrf_token %}<button type="submit" class="button">اعتماد الاستيراد</button></form><a class="button ghost" href="{% url 'inventory_import' %}">إلغاء والعودة</a></div>
+</div>{% endblock %}

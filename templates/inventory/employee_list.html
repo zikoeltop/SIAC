@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% block content %}
+<div class="title-row page-heading"><div><p class="eyebrow">ADMIN · EMPLOYEES</p><h1>إدارة الموظفين</h1><p>البيانات الأساسية المستخدمة لربط العهدة بكود HR.</p></div><a class="button" href="{% url 'employee_create' %}">＋ إضافة موظف</a></div>
+<div class="card"><form method="get" class="filter-form"><input name="q" value="{{ query }}" placeholder="بحث بكود HR أو اسم الموظف أو المشروع"><button class="button">بحث</button><a class="button ghost" href="{% url 'employee_list' %}">مسح</a></form>
+<div class="result-count">عدد النتائج: {{ employee_count }}</div>
+<div class="table-wrap"><table><thead><tr><th>HR Code</th><th>اسم الموظف</th><th>المشروع / الموقع</th><th>القطاع</th><th>الإدارة</th><th>الوظيفة</th><th>الحالة</th><th></th></tr></thead><tbody>
+{% for employee in page.object_list %}<tr><td class="mono">{{ employee.hr_code }}</td><td><b>{{ employee.name }}</b>{% if employee.arabic_name %}<small class="subline">{{ employee.arabic_name }}</small>{% endif %}</td><td>{{ employee.project|default:'-' }}</td><td>{{ employee.sector|default:'-' }}</td><td>{{ employee.department|default:'-' }}</td><td>{{ employee.position|default:'-' }}</td><td><span class="status-pill {% if employee.termination_date %}warning{% else %}positive{% endif %}">{{ employee.employment_status|default:'-' }}</span></td><td><a class="table-link" href="{% url 'employee_edit' employee.pk %}">تعديل</a></td></tr>{% empty %}<tr><td colspan="8" class="empty-cell">لا توجد بيانات موظفين. يمكنك استيراد الملف المرجعي أو إضافة موظف.</td></tr>{% endfor %}
+</tbody></table></div>
+{% include 'inventory/pagination.html' %}</div>{% endblock %}

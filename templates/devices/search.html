@@ -1,1 +1,41 @@
-{% extends 'base.html' %}{% block content %}<div class="card"><h2>البحث عن جهاز</h2><form method="get"><input name="serial" value="{{ serial }}" placeholder="Serial Number"><button>بحث</button></form></div>{% if serial and not device %}<div class="msg error">الرقم التسلسلي غير موجود.</div>{% endif %}{% if device %}<div class="card"><h2>بيانات الجهاز</h2><div class="details"><p><b>Serial Number:</b> {{ device.serial_number }}</p><p><b>User Name:</b> {{ device.user_name }}</p><p><b>Project:</b> {{ device.project }}</p><p><b>Model:</b> {{ device.model }}</p><p><b>Computer Name:</b> {{ device.computer_name }}</p><p><b>RAM:</b> {{ device.ram }}</p><p><b>Processor:</b> {{ device.processor }}</p><p><b>HDD:</b> {{ device.hdd }}</p></div><a class="button" href="{% url 'download_report' device.id %}">📥 تحميل PDF</a></div>{% endif %}{% endblock %}
+{% extends 'base.html' %}{% block content %}
+<div class="page-heading"><div><p class="eyebrow">SEARCH · CUSTODY</p><h1>البحث عن عهدة الموظف</h1><p>ابحث برقم Serial Number لجهاز، أو بكود الموظف HR Code لعرض جميع الأصول المسجلة على عهدته.</p></div></div>
+<div class="card search-card">
+  <form method="get" class="search-form">
+    <div class="field"><label for="serial">Serial Number</label><input id="serial" name="serial" value="{{ serial }}" placeholder="اكتب الرقم التسلسلي للجهاز" autocomplete="off"></div>
+    <div class="or-badge">أو</div>
+    <div class="field"><label for="hr_code">HR Code</label><input id="hr_code" name="hr_code" value="{{ hr_code }}" placeholder="اكتب كود الموظف" autocomplete="off"></div>
+    <button type="submit" class="button">بحث</button>
+  </form>
+  <p class="form-hint">إذا أدخلت القيمتين معًا، سيتم اعتماد البحث برقم Serial Number أولًا.</p>
+</div>
+{% if mode and not found %}<div class="empty-state"><span class="empty-icon">⌕</span><h2>لا توجد نتائج مطابقة</h2><p>راجع الرقم الذي أدخلته وحاول مرة أخرى.</p></div>{% endif %}
+{% if matched_assets %}
+  <div class="card">
+    <div class="section-heading"><div><h2>نتائج السيريال نمبر</h2><p>عدد السجلات المطابقة: {{ matched_assets|length }}. قد يظهر الرقم في أكثر من مصدر أو فئة أصل.</p></div></div>
+    <div class="table-wrap"><table><thead><tr><th>نوع الأصل</th><th>Serial Number</th><th>الموديل / الاسم</th><th>HR Code</th><th>الموظف</th><th>الحالة</th><th></th></tr></thead><tbody>
+    {% for asset in matched_assets %}<tr>
+      <td><span class="type-pill">{{ asset.get_asset_type_display }}</span></td><td class="mono">{{ asset.serial_number|default:'-' }}</td>
+      <td>{{ asset.item_type }} {{ asset.brand }} {{ asset.model }}<small class="subline">{{ asset.computer_name_new|default:asset.computer_name }}</small></td>
+      <td>{{ asset.hr_code|default:'-' }}</td><td>{{ asset.display_employee_name }}</td><td>{{ asset.get_asset_status_display }}</td>
+      <td>{% if asset.hr_code %}<a class="table-link" href="?hr_code={{ asset.hr_code|urlencode }}">عرض العهدة</a>{% endif %}</td>
+    </tr>{% endfor %}</tbody></table></div>
+  </div>
+  {% if matched_owners|length > 1 %}
+    <div class="card"><h2>اختر الموظف المرتبط بالسيريال</h2><div class="owner-grid">{% for owner in matched_owners %}<a class="owner-card" href="?hr_code={{ owner.hr_code|urlencode }}"><span class="mono">HR {{ owner.hr_code }}</span><b>{{ owner.employee_name|default:'موظف غير موجود في قائمة ID' }}</b><small>{{ owner.project|default:'-' }} · {{ owner.asset_count }} أصل مسجل</small></a>{% endfor %}</div></div>
+  {% endif %}
+{% endif %}
+{% if legacy_device %}<div class="card"><h2>بيانات جهاز من السجلات القديمة</h2><div class="details-grid"><div><small>Serial Number</small><b>{{ legacy_device.serial_number }}</b></div><div><small>اسم المستخدم</small><b>{{ legacy_device.user_name|default:'-' }}</b></div><div><small>المشروع</small><b>{{ legacy_device.project|default:'-' }}</b></div><div><small>الموديل</small><b>{{ legacy_device.model|default:'-' }}</b></div><div><small>Computer Name</small><b>{{ legacy_device.computer_name|default:'-' }}</b></div></div><a class="button" href="{% url 'download_report' legacy_device.pk %}">تحميل تقرير فحص الجهاز PDF</a></div>{% endif %}
+{% if mode == 'hr' or matched_owners|length == 1 %}
+  {% if employee or custody_assets or mode == 'hr' and found %}
+    <div class="card employee-summary">
+      <div class="summary-title"><div><p class="eyebrow">EMPLOYEE CUSTODY</p><h2>{{ display_employee_name|default:'بيانات الموظف غير موجودة في قائمة ID' }}</h2><p>HR Code: <strong class="mono">{{ resolved_hr_code }}</strong></p></div><span class="summary-count"><strong>{{ active_count }}</strong><small>أصل نشط</small></span></div>
+      <div class="details-grid"><div><small>المشروع / الموقع</small><b>{{ display_project|default:'-' }}</b></div><div><small>القطاع</small><b>{{ display_sector|default:'-' }}</b></div><div><small>الإدارة</small><b>{{ display_department|default:'-' }}</b></div><div><small>الوظيفة</small><b>{{ employee.position|default:'-' }}</b></div><div><small>حالة الموظف</small><b>{{ employee.employment_status|default:'-' }}</b></div></div>
+      {% if resolved_hr_code %}<a class="button" href="{% url 'download_custody_report' resolved_hr_code %}">تحميل تقرير العهدة PDF</a>{% endif %}
+    </div>
+    <div class="card"><div class="section-heading"><div><h2>الأصول المسجلة على العهدة</h2><p>الأصول المخردة غير داخلة في إجمالي العهدة النشطة.</p></div></div>
+      {% if custody_assets %}<div class="table-wrap"><table><thead><tr><th>الفئة</th><th>Serial Number</th><th>Computer Name</th><th>Brand / Model</th><th>المشروع</th><th>الحالة</th></tr></thead><tbody>{% for asset in custody_assets %}<tr><td><span class="type-pill">{{ asset.get_asset_type_display }}</span></td><td class="mono">{{ asset.serial_number|default:'-' }}</td><td>{{ asset.computer_name_new|default:asset.computer_name|default:'-' }}</td><td>{{ asset.brand }} {{ asset.model }}<small class="subline">{{ asset.item_type }}</small></td><td>{{ asset.project|default:'-' }}</td><td>{{ asset.get_asset_status_display }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty-inline">لا توجد أصول نشطة مرتبطة بهذا الموظف حاليًا.</div>{% endif %}
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
