@@ -29,8 +29,8 @@
 {% if mode == 'hr' or matched_owners|length == 1 %}
   {% if employee or custody_assets or mode == 'hr' and found %}
     <div class="card employee-summary">
-      <div class="summary-title"><div><p class="eyebrow">EMPLOYEE CUSTODY</p><h2>{{ employee.name|default:matched_owners.0.employee_name|default:'بيانات الموظف غير موجودة في قائمة ID' }}</h2><p>HR Code: <strong class="mono">{{ resolved_hr_code }}</strong></p></div><span class="summary-count"><strong>{{ active_count }}</strong><small>أصل نشط</small></span></div>
-      <div class="details-grid"><div><small>المشروع / الموقع</small><b>{{ employee.project|default:matched_owners.0.project|default:'-' }}</b></div><div><small>القطاع</small><b>{{ employee.sector|default:'-' }}</b></div><div><small>الإدارة</small><b>{{ employee.department|default:'-' }}</b></div><div><small>الوظيفة</small><b>{{ employee.position|default:'-' }}</b></div><div><small>حالة الموظف</small><b>{{ employee.employment_status|default:'-' }}</b></div></div>
+      <div class="summary-title"><div><p class="eyebrow">EMPLOYEE CUSTODY</p><h2>{{ employee.name|default:primary_owner_name|default:'بيانات الموظف غير موجودة في قائمة ID' }}</h2><p>HR Code: <strong class="mono">{{ resolved_hr_code }}</strong></p></div><span class="summary-count"><strong>{{ active_count }}</strong><small>أصل نشط</small></span></div>
+      <div class="details-grid"><div><small>المشروع / الموقع</small><b>{{ employee.project|default:primary_owner_project|default:'-' }}</b></div><div><small>القطاع</small><b>{{ employee.sector|default:'-' }}</b></div><div><small>الإدارة</small><b>{{ employee.department|default:'-' }}</b></div><div><small>الوظيفة</small><b>{{ employee.position|default:'-' }}</b></div><div><small>حالة الموظف</small><b>{{ employee.employment_status|default:'-' }}</b></div></div>
       {% if resolved_hr_code %}<a class="button" href="{% url 'download_custody_report' resolved_hr_code %}">تحميل تقرير العهدة PDF</a>{% endif %}
     </div>
     <div class="card"><div class="section-heading"><div><h2>الأصول المسجلة على العهدة</h2><p>الأصول المخردة غير داخلة في إجمالي العهدة النشطة.</p></div></div>

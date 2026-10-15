@@ -204,6 +204,11 @@ def search_device(request):
     if history_assets:
         history_groups = _movement_history_groups(history_assets)
 
+    # Avoid template access such as matched_owners.0 when a direct HR-code
+    # search has no serial-search owner list. Django resolves template filter
+    # arguments eagerly, so `default:matched_owners.0...` can raise 500 even
+    # when `employee.name` already has a value.
+    primary_owner = matched_owners[0] if matched_owners else {}
     context = {
         'serial': serial,
         'hr_code': hr_code,
@@ -214,6 +219,8 @@ def search_device(request):
         'matched_assets': matched_assets,
         'custody_assets': custody_assets,
         'matched_owners': matched_owners,
+        'primary_owner_name': primary_owner.get('employee_name', ''),
+        'primary_owner_project': primary_owner.get('project', ''),
         'legacy_device': legacy_device,
         'active_count': len(custody_assets),
         'history_groups': history_groups,
