@@ -404,63 +404,88 @@ def import_inventory_workbook(uploaded_file, actor=None):
 
         # If a physical serial exists in the Scraped sheet, reconcile matching hardware
         # inventory rows to SCRAPPED so they do not remain in active custody counts.
+        # Keep this bulk-oriented: the workbook has hundreds of scrap rows, and a
+        # per-row get_or_create can exceed Gunicorn's request timeout on PostgreSQL.
         hardware_types = [Asset.Types.COMPUTER, Asset.Types.PRINTER, Asset.Types.MONITOR, Asset.Types.OTHER]
-        scraped_rows = list(Asset.objects.filter(source_sheet='Scraped').exclude(serial_number='').select_related('employee'))
-        physical_candidates = list(Asset.objects.filter(
-            asset_type__in=hardware_types,
-        ).exclude(serial_number='').select_related('employee'))
+        scraped_rows = list(
+            Asset.objects.filter(source_sheet='Scraped').exclude(serial_number='').select_related('employee')
+        )
+        physical_candidates = list(
+            Asset.objects.filter(asset_type__in=hardware_types)
+            .exclude(serial_number='')
+            .select_related('employee')
+        )
         physical_by_serial = {}
         for physical_item in physical_candidates:
             physical_by_serial.setdefault(physical_item.serial_number.casefold(), []).append(physical_item)
+
         linked_scrap_ids = set()
+        physical_updates = {}
+        scrap_link_events = []
+        existing_scrap_link_keys = set(
+            AssetMovement.objects.filter(source_event_key__startswith='scrap-link:')
+            .values_list('source_event_key', flat=True)
+        )
         for scrap in scraped_rows:
-            candidates = [candidate for candidate in physical_by_serial.get(scrap.serial_number.casefold(), []) if candidate.pk != scrap.pk]
+            candidates = [
+                candidate
+                for candidate in physical_by_serial.get(scrap.serial_number.casefold(), [])
+                if candidate.pk != scrap.pk
+            ]
             if not candidates:
                 continue
             linked_scrap_ids.add(scrap.pk)
             for physical in candidates:
                 previous_status = physical.asset_status
                 # Prefer the last holder recorded in Scraped; if not linkable, preserve a known holder.
-                from_employee = scrap.employee if scrap.employee_id else (physical.employee if physical.employee_id and not scrap.employee_name else None)
+                from_employee = scrap.employee if scrap.employee_id else (
+                    physical.employee if physical.employee_id and not scrap.employee_name else None
+                )
                 from_hr_code = scrap.hr_code or (physical.hr_code if not scrap.employee_name else '')
                 from_name = scrap.employee.name if scrap.employee_id else (scrap.employee_name or physical.employee_name)
-                if physical.asset_status != Asset.Status.SCRAPPED:
-                    Asset.objects.filter(pk=physical.pk).update(
-                        asset_status=Asset.Status.SCRAPPED,
-                        scrap_date=scrap.scrap_date or physical.scrap_date,
-                        scrap_number=scrap.scrap_number or physical.scrap_number,
-                        updated_at=timezone.now(),
-                    )
-                    physical.asset_status = Asset.Status.SCRAPPED
-                else:
-                    Asset.objects.filter(pk=physical.pk).update(
-                        scrap_date=scrap.scrap_date or physical.scrap_date,
-                        scrap_number=scrap.scrap_number or physical.scrap_number,
-                        updated_at=timezone.now(),
-                    )
-                # One stable link event per matching source scrap row, so repeat imports are safe.
-                AssetMovement.objects.get_or_create(
-                    source_event_key=f'scrap-link:{physical.pk}:{scrap.pk}',
-                    defaults={
-                        'asset': physical,
-                        'event_type': AssetMovement.EventTypes.SCRAPPED,
-                        'effective_date': parse_date(scrap.scrap_date),
-                        'from_employee': from_employee,
-                        'to_employee': None,
-                        'from_hr_code': from_hr_code or '',
-                        'from_employee_name': from_name or '',
-                        'to_hr_code': '',
-                        'to_employee_name': 'التخريد',
-                        'from_status': previous_status,
-                        'to_status': Asset.Status.SCRAPPED,
-                        'reason': 'تخريد وارد في الشيت المرجعي Scraped',
-                        'reference_number': scrap.scrap_number or '',
-                        'notes': 'تم الربط بالسيريال نمبر المطابق بين سجل الأصل وشيت Scraped. الملف لا يتضمن بالضرورة جميع الحركات السابقة.',
-                        'source_sheet': 'Scraped',
-                        'source_row': scrap.source_row,
-                        'created_by': actor,
-                    },
-                )
+
+                physical.asset_status = Asset.Status.SCRAPPED
+                physical.scrap_date = scrap.scrap_date or physical.scrap_date
+                physical.scrap_number = scrap.scrap_number or physical.scrap_number
+                physical.updated_at = timezone.now()
+                physical_updates[physical.pk] = physical
+
+                # One stable link event per matching source scrap row, idempotent on re-import.
+                event_key = f'scrap-link:{physical.pk}:{scrap.pk}'
+                if event_key in existing_scrap_link_keys:
+                    continue
+                existing_scrap_link_keys.add(event_key)
+                scrap_link_events.append(AssetMovement(
+                    asset=physical,
+                    event_type=AssetMovement.EventTypes.SCRAPPED,
+                    effective_date=parse_date(scrap.scrap_date),
+                    from_employee=from_employee,
+                    to_employee=None,
+                    from_hr_code=from_hr_code or '',
+                    from_employee_name=from_name or '',
+                    to_hr_code='',
+                    to_employee_name='التخريد',
+                    from_status=previous_status,
+                    to_status=Asset.Status.SCRAPPED,
+                    reason='تخريد وارد في الشيت المرجعي Scraped',
+                    reference_number=scrap.scrap_number or '',
+                    notes='تم الربط بالسيريال نمبر المطابق بين سجل الأصل وشيت Scraped. الملف لا يتضمن بالضرورة جميع الحركات السابقة.',
+                    source_sheet='Scraped',
+                    source_row=scrap.source_row,
+                    source_event_key=event_key,
+                    created_by=actor,
+                ))
+
+        if physical_updates:
+            Asset.objects.bulk_update(
+                list(physical_updates.values()),
+                ['asset_status', 'scrap_date', 'scrap_number', 'updated_at'],
+                batch_size=500,
+            )
+        if scrap_link_events:
+            AssetMovement.objects.bulk_create(
+                scrap_link_events, batch_size=500, ignore_conflicts=True,
+            )
 
         # Record detected custody/status changes across subsequent workbook imports.
         for change in import_changes:
