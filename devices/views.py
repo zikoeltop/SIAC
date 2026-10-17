@@ -156,6 +156,9 @@ def _dashboard_model_rows(request):
     if status_filter not in {'all', 'active', 'in_stock', 'pending', 'scrapped', 'archived'}:
         status_filter = 'all'
     model_query = (request.GET.get('model_q') or '').strip()
+    # A user can either choose a known brand/model from the dropdown or type a custom query.
+    # Free text takes precedence when both fields are submitted.
+    model_option = '' if model_query else (request.GET.get('model_option') or '').strip()
 
     qs = Asset.objects.filter(asset_type__in=[Asset.Types.COMPUTER, Asset.Types.MONITOR, Asset.Types.PRINTER])
     laptop_q = (
@@ -182,12 +185,28 @@ def _dashboard_model_rows(request):
     elif status_filter == 'archived':
         qs = qs.filter(asset_status=Asset.Status.ARCHIVED)
 
+    # Dropdown options come from the current type/status scope, so the list stays relevant.
+    option_source = qs
+    brand_values = sorted({(value or '').strip() for value in option_source.exclude(brand='').values_list('brand', flat=True) if (value or '').strip()}, key=str.casefold)
+    model_values = sorted({(value or '').strip() for value in option_source.exclude(model='').values_list('model', flat=True) if (value or '').strip()}, key=str.casefold)
+    brand_options = [{'value': f'brand::{value}', 'label': value} for value in brand_values]
+    model_options = [{'value': f'model::{value}', 'label': value} for value in model_values]
+    valid_option_values = {option['value'] for option in brand_options + model_options}
+    if model_option not in valid_option_values:
+        model_option = ''
+
     if model_query:
         qs = qs.filter(
             Q(model__icontains=model_query) | Q(item_type__icontains=model_query) |
             Q(brand__icontains=model_query) | Q(computer_name__icontains=model_query) |
             Q(computer_name_new__icontains=model_query)
         )
+    elif model_option:
+        option_kind, option_value = model_option.split('::', 1)
+        if option_kind == 'brand':
+            qs = qs.filter(brand__iexact=option_value)
+        elif option_kind == 'model':
+            qs = qs.filter(model__iexact=option_value)
 
     grouped = list(qs.annotate(
         model_label=Case(
@@ -204,6 +223,9 @@ def _dashboard_model_rows(request):
         'model_type': model_type,
         'status_filter': status_filter,
         'model_query': model_query,
+        'model_option': model_option,
+        'brand_options': brand_options,
+        'model_options': model_options,
         'model_rows': grouped,
         'model_total': sum(row['count'] for row in grouped),
     }
@@ -303,6 +325,9 @@ def _dashboard_context(request, paginate=True):
         'model_type': model_info['model_type'],
         'status_filter': model_info['status_filter'],
         'model_query': model_info['model_query'],
+        'model_option': model_info['model_option'],
+        'brand_options': model_info['brand_options'],
+        'model_options': model_info['model_options'],
         'model_total': model_info['model_total'],
         'model_rows': rows,
         'models_page': models_page,
@@ -349,11 +374,11 @@ def inventory_dashboard_export(request):
         summary.append(list(row))
 
     models_ws = workbook.create_sheet('Model Counts')
-    models_ws.append(['Asset group', 'Brand', 'Model / Item Type', 'Count', 'Status filter', 'Search filter'])
+    models_ws.append(['Asset group', 'Brand', 'Model / Item Type', 'Count', 'Status filter', 'Selected brand/model', 'Search filter'])
     for row in context['model_rows']:
         models_ws.append([
             context['model_type'], row['brand_label'], row['model_label'], row['count'],
-            context['status_filter'], context['model_query'],
+            context['status_filter'], context['model_option'], context['model_query'],
         ])
 
     for sheet_name, key, label in [

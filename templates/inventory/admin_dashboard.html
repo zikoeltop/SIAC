@@ -21,7 +21,7 @@
 </div>
 
 <div class="card dashboard-models-card">
-  <div class="section-heading"><div><h2>البحث عن عدد الأجهزة حسب الموديل</h2><p>اختار نوع الجهاز والحالة، واكتب جزءًا من اسم الموديل أو الماركة. النتائج مجمّعة لكل موديل.</p></div><a class="button ghost" href="{% url 'inventory_dashboard_export' %}?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ model_query|urlencode }}">تصدير التقرير Excel</a></div>
+  <div class="section-heading"><div><h2>البحث عن عدد الأجهزة حسب الموديل</h2><p>اختار نوع الجهاز والحالة، ثم اختار ماركة أو موديل من القوائم الموجودة أو اكتب نصًا يدويًا. النص المكتوب له الأولوية إذا استخدمت الطريقتين. النتائج مجمّعة لكل موديل.</p></div><a class="button ghost" href="{% url 'inventory_dashboard_export' %}?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_option={{ model_option|urlencode }}&model_q={{ model_query|urlencode }}">تصدير التقرير Excel</a></div>
   <form method="get" class="dashboard-model-filter">
     <div class="field"><label for="model_type">نوع الجهاز</label><select id="model_type" name="model_type">
       <option value="all" {% if model_type == 'all' %}selected{% endif %}>كل الأنواع</option>
@@ -38,9 +38,27 @@
       <option value="scrapped" {% if status_filter == 'scrapped' %}selected{% endif %}>مخردة</option>
       <option value="archived" {% if status_filter == 'archived' %}selected{% endif %}>مؤرشفة</option>
     </select></div>
-    <div class="field"><label for="model_q">بحث بالموديل أو الماركة</label><input id="model_q" name="model_q" value="{{ model_query }}" placeholder="مثال: HP EliteBook أو Dell"></div>
+    <div class="field"><label for="model_option">اختيار ماركة أو موديل موجود</label><select id="model_option" name="model_option">
+      <option value="">كل الماركات والموديلات</option>
+      {% if brand_options %}<optgroup label="الماركات">{% for option in brand_options %}<option value="{{ option.value }}" {% if model_option == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</optgroup>{% endif %}
+      {% if model_options %}<optgroup label="الموديلات">{% for option in model_options %}<option value="{{ option.value }}" {% if model_option == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</optgroup>{% endif %}
+    </select></div>
+    <div class="field"><label for="model_q">أو اكتب الموديل أو الماركة</label><input id="model_q" name="model_q" value="{{ model_query }}" placeholder="مثال: HP EliteBook أو Dell" autocomplete="off"></div>
     <button class="button" type="submit">عرض النتائج</button><a class="button ghost" href="{% url 'inventory_dashboard' %}">مسح الفلاتر</a>
   </form>
+  <script>
+    (function () {
+      const optionSelect = document.getElementById('model_option');
+      const textSearch = document.getElementById('model_q');
+      if (!optionSelect || !textSearch) return;
+      optionSelect.addEventListener('change', function () {
+        if (optionSelect.value) textSearch.value = '';
+      });
+      textSearch.addEventListener('input', function () {
+        if (textSearch.value.trim()) optionSelect.value = '';
+      });
+    })();
+  </script>
   <div class="result-count">إجمالي الأجهزة المطابقة للفلاتر: <strong>{{ model_total }}</strong></div>
   <div class="table-wrap"><table><thead><tr><th>نوع الجهاز</th><th>الماركة</th><th>الموديل / النوع</th><th>العدد</th><th></th></tr></thead><tbody>
     {% for row in models_page.object_list %}
@@ -48,9 +66,9 @@
     {% empty %}<tr><td colspan="5" class="empty-cell">لا توجد أجهزة مطابقة للفلاتر الحالية.</td></tr>{% endfor %}
   </tbody></table></div>
   {% if models_page.paginator.num_pages > 1 %}<div class="pagination">
-    {% if models_page.has_previous %}<a href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ model_query|urlencode }}&page={{ models_page.previous_page_number }}">السابق</a>{% endif %}
+    {% if models_page.has_previous %}<a href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_option={{ model_option|urlencode }}&model_q={{ model_query|urlencode }}&page={{ models_page.previous_page_number }}">السابق</a>{% endif %}
     <span>صفحة {{ models_page.number }} من {{ models_page.paginator.num_pages }}</span>
-    {% if models_page.has_next %}<a href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ model_query|urlencode }}&page={{ models_page.next_page_number }}">التالي</a>{% endif %}
+    {% if models_page.has_next %}<a href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_option={{ model_option|urlencode }}&model_q={{ model_query|urlencode }}&page={{ models_page.next_page_number }}">التالي</a>{% endif %}
   </div>{% endif %}
 </div>
 
