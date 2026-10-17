@@ -1,0 +1,69 @@
+{% extends 'base.html' %}{% block content %}
+<section class="page-hero admin-dashboard-hero">
+  <div><p class="eyebrow">SIAC · MANAGEMENT DASHBOARD</p><h1>لوحة مؤشرات إدارة الأصول</h1><p>ملخص الحالة الحالية للمخزون، والعهد النشطة، والموديلات، وتوزيع الأجهزة حسب المشروع والإدارة.</p></div>
+  <a class="button" href="{% url 'movement_list' %}">إدارة حركات العهدة ←</a>
+</section>
+
+<div class="stats-grid dashboard-status-grid">
+  <div class="stat-card"><span class="stat-label">إجمالي الأصول المتتبعة</span><strong>{{ tracked_asset_count }}</strong><span class="stat-icon">▣</span></div>
+  <div class="stat-card"><span class="stat-label">على عهدة موظف</span><strong>{{ active_count }}</strong><span class="stat-icon">♙</span></div>
+  <div class="stat-card"><span class="stat-label">في المخزن</span><strong>{{ stock_count }}</strong><span class="stat-icon">▤</span></div>
+  <div class="stat-card"><span class="stat-label">مخردة</span><strong>{{ scrapped_count }}</strong><span class="stat-icon">▧</span></div>
+  <div class="stat-card"><span class="stat-label">في انتظار الإجراء</span><strong>{{ pending_count }}</strong><span class="stat-icon">◷</span></div>
+  <div class="stat-card"><span class="stat-label">مؤرشفة</span><strong>{{ archived_count }}</strong><span class="stat-icon">▥</span></div>
+</div>
+
+<div class="dashboard-device-grid">
+  <a class="stat-card device-stat" href="?model_type=pc"><span class="stat-label">أجهزة PC / Desktop</span><strong>{{ pc_count }}</strong><small>اضغط لعرض الموديلات</small></a>
+  <a class="stat-card device-stat" href="?model_type=laptop"><span class="stat-label">أجهزة Laptop</span><strong>{{ laptop_count }}</strong><small>اضغط لعرض الموديلات</small></a>
+  <a class="stat-card device-stat" href="?model_type=monitor"><span class="stat-label">الشاشات</span><strong>{{ monitor_count }}</strong><small>اضغط لعرض الموديلات</small></a>
+  <a class="stat-card device-stat" href="?model_type=printer"><span class="stat-label">الطابعات</span><strong>{{ printer_count }}</strong><small>اضغط لعرض الموديلات</small></a>
+</div>
+
+<div class="card dashboard-models-card">
+  <div class="section-heading"><div><h2>البحث عن عدد الأجهزة حسب الموديل</h2><p>اختار نوع الجهاز والحالة، واكتب جزءًا من اسم الموديل أو الماركة. النتائج مجمّعة لكل موديل.</p></div><a class="button ghost" href="{% url 'inventory_dashboard_export' %}?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ model_query|urlencode }}">تصدير التقرير Excel</a></div>
+  <form method="get" class="dashboard-model-filter">
+    <div class="field"><label for="model_type">نوع الجهاز</label><select id="model_type" name="model_type">
+      <option value="all" {% if model_type == 'all' %}selected{% endif %}>كل الأنواع</option>
+      <option value="pc" {% if model_type == 'pc' %}selected{% endif %}>PC / Desktop</option>
+      <option value="laptop" {% if model_type == 'laptop' %}selected{% endif %}>Laptop</option>
+      <option value="monitor" {% if model_type == 'monitor' %}selected{% endif %}>الشاشات</option>
+      <option value="printer" {% if model_type == 'printer' %}selected{% endif %}>الطابعات</option>
+    </select></div>
+    <div class="field"><label for="status">حالة الأصل</label><select id="status" name="status">
+      <option value="all" {% if status_filter == 'all' %}selected{% endif %}>كل الحالات</option>
+      <option value="active" {% if status_filter == 'active' %}selected{% endif %}>على عهدة موظف</option>
+      <option value="in_stock" {% if status_filter == 'in_stock' %}selected{% endif %}>في المخزن</option>
+      <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>في انتظار الإجراء</option>
+      <option value="scrapped" {% if status_filter == 'scrapped' %}selected{% endif %}>مخردة</option>
+      <option value="archived" {% if status_filter == 'archived' %}selected{% endif %}>مؤرشفة</option>
+    </select></div>
+    <div class="field"><label for="model_q">بحث بالموديل أو الماركة</label><input id="model_q" name="model_q" value="{{ model_query }}" placeholder="مثال: HP EliteBook أو Dell"></div>
+    <button class="button" type="submit">عرض النتائج</button><a class="button ghost" href="{% url 'inventory_dashboard' %}">مسح الفلاتر</a>
+  </form>
+  <div class="result-count">إجمالي الأجهزة المطابقة للفلاتر: <strong>{{ model_total }}</strong></div>
+  <div class="table-wrap"><table><thead><tr><th>نوع الجهاز</th><th>الماركة</th><th>الموديل / النوع</th><th>العدد</th><th></th></tr></thead><tbody>
+    {% for row in models_page.object_list %}
+    <tr><td>{% if model_type == 'all' %}أجهزة مكتبية ولابتوب وشاشات وطابعات{% elif model_type == 'pc' %}PC / Desktop{% elif model_type == 'laptop' %}Laptop{% elif model_type == 'monitor' %}شاشات{% else %}طابعات{% endif %}</td><td>{{ row.brand_label }}</td><td>{{ row.model_label }}</td><td><strong>{{ row.count }}</strong></td><td><a class="table-link" href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ row.model_label|urlencode }}">تفاصيل الموديل</a></td></tr>
+    {% empty %}<tr><td colspan="5" class="empty-cell">لا توجد أجهزة مطابقة للفلاتر الحالية.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if models_page.paginator.num_pages > 1 %}<div class="pagination">
+    {% if models_page.has_previous %}<a href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ model_query|urlencode }}&page={{ models_page.previous_page_number }}">السابق</a>{% endif %}
+    <span>صفحة {{ models_page.number }} من {{ models_page.paginator.num_pages }}</span>
+    {% if models_page.has_next %}<a href="?model_type={{ model_type|urlencode }}&status={{ status_filter|urlencode }}&model_q={{ model_query|urlencode }}&page={{ models_page.next_page_number }}">التالي</a>{% endif %}
+  </div>{% endif %}
+</div>
+
+<div class="dashboard-charts-grid">
+  <section class="card"><div class="section-heading"><div><h2>التوزيع حسب النوع</h2><p>الأصول غير المخردة وغير المؤرشفة.</p></div></div>
+    {% for row in type_data %}<div class="bar-row"><span>{{ row.label }}</span><div class="bar-track"><i style="width:{{ row.percent }}%"></i></div><b>{{ row.count }}</b></div>{% endfor %}
+  </section>
+  <section class="card"><div class="section-heading"><div><h2>أعلى المشروعات</h2><p>حسب عدد الأصول النشطة وغير المخردة.</p></div></div>
+    {% for row in project_data %}<div class="bar-row"><span>{{ row.chart_label }}</span><div class="bar-track"><i style="width:{{ row.percent }}%"></i></div><b>{{ row.count }}</b></div>{% empty %}<p class="empty-inline">لا توجد بيانات مشروعات.</p>{% endfor %}
+  </section>
+  <section class="card"><div class="section-heading"><div><h2>أعلى الإدارات</h2><p>حسب عدد الأصول النشطة وغير المخردة.</p></div></div>
+    {% for row in department_data %}<div class="bar-row"><span>{{ row.chart_label }}</span><div class="bar-track"><i style="width:{{ row.percent }}%"></i></div><b>{{ row.count }}</b></div>{% empty %}<p class="empty-inline">لا توجد بيانات إدارات.</p>{% endfor %}
+  </section>
+</div>
+<p class="dashboard-note">تعتمد الإحصاءات على سجلات الأصول الفعلية وتستبعد صفوف الشيتات المصدرية الخاصة بالتخريد وطلبات الصرف والتعيينات. إجماليات الموديلات تتأثر بالفلاتر المحددة أعلى التقرير.</p>
+{% endblock %}

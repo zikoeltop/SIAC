@@ -1,16 +1,19 @@
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db.models import Q, Count, F, Prefetch
+from django.db import transaction
+from django.db.models import Q, Count, F, Prefetch, Case, When, Value, CharField
 from django.http import FileResponse, HttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.text import slugify
 from django.utils import timezone
+from openpyxl import Workbook
+import io
 
 from accounts.decorators import admin_required
 from audit.models import AuditLog
 from audit.utils import log_event
-from .forms import AssetForm, EmployeeForm, ExcelUploadForm, InventoryWorkbookImportForm
+from .forms import (AssetForm, EmployeeForm, ExcelUploadForm, InventoryWorkbookImportForm, CustodyMovementForm)
 from .inventory_exports import build_inventory_excel_response
 from .inventory_services import import_inventory_workbook, preview_inventory_workbook
 from .models import Asset, AssetMovement, Device, DeviceImport, Employee, PendingExcelImport, PendingInventoryImport
@@ -131,15 +134,388 @@ def _omit_duplicate_scrap_rows(assets):
     )]
 
 
-@login_required
-def dashboard(request):
-    return render(request, 'devices/dashboard.html', {
+def _tracked_assets():
+    """Canonical asset rows, excluding workbook-only pipeline and duplicate Scraped rows."""
+    return Asset.objects.exclude(asset_type__in=[
+        Asset.Types.SCRAP, Asset.Types.NEW_2026, Asset.Types.REQUEST_2025,
+    ])
+
+
+def _hardware_assets():
+    return Asset.objects.filter(asset_type__in=[
+        Asset.Types.COMPUTER, Asset.Types.MONITOR, Asset.Types.PRINTER, Asset.Types.OTHER,
+    ])
+
+
+def _dashboard_model_rows(request):
+    """Filtered PC/laptop/monitor/printer counts, grouped by brand and model."""
+    model_type = (request.GET.get('model_type') or 'all').strip()
+    if model_type not in {'all', 'pc', 'laptop', 'monitor', 'printer'}:
+        model_type = 'all'
+    status_filter = (request.GET.get('status') or 'all').strip()
+    if status_filter not in {'all', 'active', 'in_stock', 'pending', 'scrapped', 'archived'}:
+        status_filter = 'all'
+    model_query = (request.GET.get('model_q') or '').strip()
+
+    qs = Asset.objects.filter(asset_type__in=[Asset.Types.COMPUTER, Asset.Types.MONITOR, Asset.Types.PRINTER])
+    laptop_q = (
+        Q(item_type__icontains='laptop') | Q(model__icontains='laptop') |
+        Q(item_type__icontains='notebook') | Q(model__icontains='notebook')
+    )
+    if model_type == 'pc':
+        qs = qs.filter(asset_type=Asset.Types.COMPUTER).exclude(laptop_q)
+    elif model_type == 'laptop':
+        qs = qs.filter(asset_type=Asset.Types.COMPUTER).filter(laptop_q)
+    elif model_type == 'monitor':
+        qs = qs.filter(asset_type=Asset.Types.MONITOR)
+    elif model_type == 'printer':
+        qs = qs.filter(asset_type=Asset.Types.PRINTER)
+
+    if status_filter == 'active':
+        qs = qs.filter(asset_status=Asset.Status.ACTIVE).exclude(hr_code='')
+    elif status_filter == 'in_stock':
+        qs = qs.filter(Q(asset_status=Asset.Status.IN_STOCK) | Q(asset_status=Asset.Status.ACTIVE, hr_code=''))
+    elif status_filter == 'pending':
+        qs = qs.filter(asset_status=Asset.Status.PENDING)
+    elif status_filter == 'scrapped':
+        qs = qs.filter(asset_status=Asset.Status.SCRAPPED)
+    elif status_filter == 'archived':
+        qs = qs.filter(asset_status=Asset.Status.ARCHIVED)
+
+    if model_query:
+        qs = qs.filter(
+            Q(model__icontains=model_query) | Q(item_type__icontains=model_query) |
+            Q(brand__icontains=model_query) | Q(computer_name__icontains=model_query) |
+            Q(computer_name_new__icontains=model_query)
+        )
+
+    grouped = list(qs.annotate(
+        model_label=Case(
+            When(model__gt='', then=F('model')),
+            When(item_type__gt='', then=F('item_type')),
+            default=Value('غير محدد'), output_field=CharField(),
+        ),
+        brand_label=Case(
+            When(brand__gt='', then=F('brand')),
+            default=Value('غير محدد'), output_field=CharField(),
+        ),
+    ).values('brand_label', 'model_label').annotate(count=Count('id')).order_by('-count', 'brand_label', 'model_label'))
+    return {
+        'model_type': model_type,
+        'status_filter': status_filter,
+        'model_query': model_query,
+        'model_rows': grouped,
+        'model_total': sum(row['count'] for row in grouped),
+    }
+
+
+def _chart_rows(queryset, field_name, limit=8):
+    rows = list(queryset.annotate(
+        chart_label=Case(
+            When(**{f'{field_name}__gt': ''}, then=F(field_name)),
+            default=Value('غير محدد'), output_field=CharField(),
+        )
+    ).values('chart_label').annotate(count=Count('id')).order_by('-count', 'chart_label')[:limit])
+    max_count = max([row['count'] for row in rows] or [1])
+    for row in rows:
+        row['percent'] = max(5, int(row['count'] * 100 / max_count))
+    return rows
+
+
+def _dashboard_context(request, paginate=True):
+    from accounts.models import User
+
+    tracked = _tracked_assets()
+    hardware = _hardware_assets()
+    assigned_qs = tracked.filter(asset_status=Asset.Status.ACTIVE).exclude(hr_code='')
+    stock_qs = tracked.filter(Q(asset_status=Asset.Status.IN_STOCK) | Q(asset_status=Asset.Status.ACTIVE, hr_code=''))
+    scrapped_qs = tracked.filter(asset_status=Asset.Status.SCRAPPED)
+    pending_qs = tracked.filter(asset_status=Asset.Status.PENDING)
+    archived_qs = tracked.filter(asset_status=Asset.Status.ARCHIVED)
+
+    computer_qs = hardware.filter(asset_type=Asset.Types.COMPUTER)
+    laptop_q = (
+        Q(item_type__icontains='laptop') | Q(model__icontains='laptop') |
+        Q(item_type__icontains='notebook') | Q(model__icontains='notebook')
+    )
+    model_info = _dashboard_model_rows(request)
+    rows = model_info['model_rows']
+    if paginate:
+        models_page = Paginator(rows, 25).get_page(request.GET.get('page'))
+    else:
+        models_page = None
+
+    type_data = []
+    active_for_charts = tracked.exclude(asset_status__in=[Asset.Status.SCRAPPED, Asset.Status.ARCHIVED])
+    active_hardware = hardware.exclude(asset_status__in=[Asset.Status.SCRAPPED, Asset.Status.ARCHIVED])
+    active_computers = active_hardware.filter(asset_type=Asset.Types.COMPUTER)
+    active_laptop_count = active_computers.filter(laptop_q).count()
+    active_pc_count = active_computers.exclude(laptop_q).count()
+    chart_values = [
+        ('PC / Desktop', active_pc_count),
+        ('Laptop', active_laptop_count),
+        ('الشاشات', active_hardware.filter(asset_type=Asset.Types.MONITOR).count()),
+        ('الطابعات', active_hardware.filter(asset_type=Asset.Types.PRINTER).count()),
+        ('تراخيص GStar CAD', active_for_charts.filter(asset_type=Asset.Types.GSTAR).count()),
+        ('أصول أخرى', active_hardware.filter(asset_type=Asset.Types.OTHER).count()),
+    ]
+    for label, count in chart_values:
+        type_data.append({'label': label, 'count': count})
+    type_max = max([row['count'] for row in type_data] or [1])
+    for row in type_data:
+        row['percent'] = max(3, int(row['count'] * 100 / type_max)) if row['count'] else 0
+
+    projects = _chart_rows(active_for_charts, 'project')
+    departments = _chart_rows(active_for_charts, 'department')
+
+    scrap_source_rows = list(Asset.objects.filter(asset_type=Asset.Types.SCRAP).values('id', 'serial_number'))
+    scrapped_serials = set(
+        tracked.filter(asset_status=Asset.Status.SCRAPPED).exclude(serial_number='').values_list('serial_number', flat=True)
+    )
+    scrapped_serials_folded = {serial.casefold() for serial in scrapped_serials}
+    standalone_scraps = set()
+    for row in scrap_source_rows:
+        serial = (row['serial_number'] or '').strip()
+        if serial and serial.casefold() in scrapped_serials_folded:
+            continue
+        standalone_scraps.add(serial.casefold() if serial else f"row:{row['id']}")
+    scrapped_count = scrapped_qs.count() + len(standalone_scraps)
+
+    return {
         'device_count': Device.objects.count(),
         'asset_count': Asset.objects.count(),
         'employee_count': Employee.objects.count(),
-        'user_count': __import__('accounts.models', fromlist=['User']).User.objects.count(),
+        'user_count': User.objects.count(),
         'is_admin': request.user.is_admin_role,
+        'tracked_asset_count': tracked.count(),
+        'active_count': assigned_qs.count(),
+        'stock_count': stock_qs.count(),
+        'scrapped_count': scrapped_count,
+        'pending_count': pending_qs.count(),
+        'archived_count': archived_qs.count(),
+        'pc_count': computer_qs.exclude(laptop_q).count(),
+        'laptop_count': computer_qs.filter(laptop_q).count(),
+        'monitor_count': hardware.filter(asset_type=Asset.Types.MONITOR).count(),
+        'printer_count': hardware.filter(asset_type=Asset.Types.PRINTER).count(),
+        'type_data': type_data,
+        'project_data': projects,
+        'department_data': departments,
+        'model_type': model_info['model_type'],
+        'status_filter': model_info['status_filter'],
+        'model_query': model_info['model_query'],
+        'model_total': model_info['model_total'],
+        'model_rows': rows,
+        'models_page': models_page,
+    }
+
+
+@login_required
+def dashboard(request):
+    context = {
+        'device_count': Device.objects.count(),
+        'asset_count': Asset.objects.count(),
+        'employee_count': Employee.objects.count(),
+        'is_admin': request.user.is_admin_role,
+    }
+    if request.user.is_admin_role:
+        context['user_count'] = __import__('accounts.models', fromlist=['User']).User.objects.count()
+    return render(request, 'devices/dashboard.html', context)
+
+
+@admin_required
+def inventory_dashboard(request):
+    return render(request, 'inventory/admin_dashboard.html', _dashboard_context(request))
+
+
+@admin_required
+def inventory_dashboard_export(request):
+    context = _dashboard_context(request, paginate=False)
+    workbook = Workbook()
+    summary = workbook.active
+    summary.title = 'Summary'
+    summary.append(['Metric', 'Count'])
+    summary_rows = [
+        ('Total imported/source rows', context['asset_count']),
+        ('Tracked assets excluding source-only rows', context['tracked_asset_count']),
+        ('Active custody', context['active_count']),
+        ('In stock', context['stock_count']),
+        ('Scrapped assets (deduplicated against Scraped source rows)', context['scrapped_count']),
+        ('Pending', context['pending_count']),
+        ('Archived', context['archived_count']),
+        ('PC', context['pc_count']), ('Laptop', context['laptop_count']),
+        ('Monitors', context['monitor_count']), ('Printers', context['printer_count']),
+    ]
+    for row in summary_rows:
+        summary.append(list(row))
+
+    models_ws = workbook.create_sheet('Model Counts')
+    models_ws.append(['Asset group', 'Brand', 'Model / Item Type', 'Count', 'Status filter', 'Search filter'])
+    for row in context['model_rows']:
+        models_ws.append([
+            context['model_type'], row['brand_label'], row['model_label'], row['count'],
+            context['status_filter'], context['model_query'],
+        ])
+
+    for sheet_name, key, label in [
+        ('By Project', 'project_data', 'Project'), ('By Department', 'department_data', 'Department'),
+        ('By Type', 'type_data', 'Asset Type'),
+    ]:
+        ws = workbook.create_sheet(sheet_name)
+        ws.append([label, 'Count'])
+        for row in context[key]:
+            ws.append([row['label'] if 'label' in row else row['chart_label'], row['count']])
+
+    for ws in workbook.worksheets:
+        ws.freeze_panes = 'A2'
+        ws.auto_filter.ref = ws.dimensions
+        for col in ws.columns:
+            letter = col[0].column_letter
+            width = min(max(max(len(str(cell.value or '')) for cell in col) + 2, 12), 48)
+            ws.column_dimensions[letter].width = width
+
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    log_event(request.user, 'DASHBOARD_EXPORT', request, 'Exported filtered management dashboard and model counts')
+    response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = 'attachment; filename="SIAC_Management_Dashboard.xlsx"'
+    return response
+
+
+@admin_required
+def movement_list(request):
+    query = (request.GET.get('q') or '').strip()
+    event_type = (request.GET.get('event_type') or '').strip()
+    movements = AssetMovement.objects.select_related('asset', 'from_employee', 'to_employee', 'created_by')
+    if query:
+        movements = movements.filter(
+            Q(asset__serial_number__icontains=query) | Q(asset__model__icontains=query) |
+            Q(asset__computer_name__icontains=query) | Q(asset__computer_name_new__icontains=query) |
+            Q(from_hr_code__icontains=query) | Q(to_hr_code__icontains=query) |
+            Q(from_employee_name__icontains=query) | Q(to_employee_name__icontains=query) |
+            Q(reason__icontains=query) | Q(reference_number__icontains=query)
+        )
+    if event_type in dict(AssetMovement.EventTypes.choices):
+        movements = movements.filter(event_type=event_type)
+    pager = Paginator(movements.order_by('-created_at', '-id'), 50)
+    page = pager.get_page(request.GET.get('page'))
+    return render(request, 'inventory/movement_list.html', {
+        'page': page, 'query': query, 'selected_event_type': event_type,
+        'event_types': AssetMovement.EventTypes.choices, 'movement_count': movements.count(),
     })
+
+
+@admin_required
+def movement_asset_search(request):
+    query = (request.GET.get('q') or '').strip()
+    physical_asset_types = [Asset.Types.COMPUTER, Asset.Types.PRINTER, Asset.Types.MONITOR, Asset.Types.GSTAR, Asset.Types.OTHER]
+    assets = Asset.objects.filter(asset_type__in=physical_asset_types).exclude(
+        asset_status__in=[Asset.Status.SCRAPPED, Asset.Status.ARCHIVED]
+    ).select_related('employee')
+    if query:
+        assets = assets.filter(
+            Q(serial_number__icontains=query) | Q(asset_tag__icontains=query) |
+            Q(computer_name__icontains=query) | Q(computer_name_new__icontains=query) |
+            Q(model__icontains=query) | Q(brand__icontains=query) | Q(hr_code__icontains=query)
+        )
+    else:
+        assets = assets.none()
+    pager = Paginator(assets.order_by('asset_type', 'serial_number', 'id'), 30)
+    page = pager.get_page(request.GET.get('page'))
+    return render(request, 'inventory/movement_asset_search.html', {
+        'query': query, 'page': page, 'match_count': assets.count(),
+    })
+
+
+@admin_required
+def movement_create(request, asset_pk):
+    asset = get_object_or_404(Asset.objects.select_related('employee'), pk=asset_pk)
+    if asset.asset_type in (Asset.Types.SCRAP, Asset.Types.NEW_2026, Asset.Types.REQUEST_2025):
+        messages.error(request, 'السجل المحدد ليس أصلًا تشغيليًا قابلًا لحركة عهدة مستقلة.')
+        return redirect('movement_asset_search')
+
+    form = CustodyMovementForm(request.POST or None, asset=asset)
+    if request.method == 'POST' and form.is_valid():
+        try:
+            with transaction.atomic():
+                locked = Asset.objects.select_for_update().select_related('employee').get(pk=asset.pk)
+                # Revalidate against the latest locked state so two admins cannot transfer the same old state.
+                form = CustodyMovementForm(request.POST, asset=locked)
+                if not form.is_valid():
+                    return render(request, 'inventory/movement_form.html', {'asset': locked, 'form': form})
+
+                old_hr = (locked.hr_code or '').strip()
+                old_employee = locked.employee if locked.employee_id else (Employee.objects.filter(hr_code__iexact=old_hr).first() if old_hr else None)
+                old_name = (old_employee.name if old_employee else locked.employee_name or old_hr or 'المخزون').strip()
+                old_status = locked.asset_status
+                action = form.cleaned_data['event_type']
+                target = form.cleaned_data.get('target_employee')
+                movement_date = form.cleaned_data['effective_date']
+                reason = form.cleaned_data['reason'].strip()
+                reference = form.cleaned_data.get('reference_number', '').strip()
+                notes = form.cleaned_data.get('notes', '').strip()
+
+                if action in (AssetMovement.EventTypes.ASSIGNED, AssetMovement.EventTypes.TRANSFERRED):
+                    locked.hr_code = target.hr_code
+                    locked.employee = target
+                    locked.employee_name = target.name
+                    if target.project:
+                        locked.project = target.project
+                    if target.sector:
+                        locked.sector = target.sector
+                    if target.department:
+                        locked.department = target.department
+                    locked.asset_status = Asset.Status.ACTIVE
+                    to_employee, to_hr, to_name = target, target.hr_code, target.name
+                elif action == AssetMovement.EventTypes.RETURNED:
+                    locked.hr_code = ''
+                    locked.employee = None
+                    locked.employee_name = ''
+                    locked.asset_status = Asset.Status.IN_STOCK
+                    to_employee, to_hr, to_name = None, '', 'المخزون'
+                else:  # SCRAPPED
+                    locked.hr_code = ''
+                    locked.employee = None
+                    locked.employee_name = ''
+                    locked.asset_status = Asset.Status.SCRAPPED
+                    locked.scrap_date = movement_date.isoformat()
+                    locked.scrap_number = reference
+                    to_employee, to_hr, to_name = None, '', 'التخريد'
+
+                locked.save()
+                movement = AssetMovement.objects.create(
+                    asset=locked,
+                    event_type=action,
+                    effective_date=movement_date,
+                    from_employee=old_employee,
+                    to_employee=to_employee,
+                    from_hr_code=old_hr,
+                    from_employee_name=old_name,
+                    to_hr_code=to_hr,
+                    to_employee_name=to_name,
+                    from_status=old_status,
+                    to_status=locked.asset_status,
+                    reason=reason,
+                    reference_number=reference,
+                    notes=notes,
+                    created_by=request.user,
+                )
+                action_log = {
+                    AssetMovement.EventTypes.ASSIGNED: 'ASSET_ASSIGN',
+                    AssetMovement.EventTypes.TRANSFERRED: 'ASSET_TRANSFER',
+                    AssetMovement.EventTypes.RETURNED: 'ASSET_RETURN',
+                    AssetMovement.EventTypes.SCRAPPED: 'ASSET_SCRAP',
+                }[action]
+                log_event(
+                    request.user, action_log, request,
+                    f'{movement.get_event_type_display()}: asset_id={locked.pk}, serial={locked.serial_number}, from={old_hr or "stock"}, to={to_hr or to_name}, date={movement_date.isoformat()}, reference={reference}',
+                )
+                messages.success(request, f'تم تسجيل الحركة بنجاح للأصل {locked.serial_number or locked.model or locked.pk}. تم حفظ الحركة في السجل التاريخي.')
+                return redirect('movement_list')
+        except Asset.DoesNotExist:
+            messages.error(request, 'الأصل لم يعد موجودًا؛ حدّث الصفحة ثم حاول مرة أخرى.')
+            return redirect('movement_asset_search')
+    return render(request, 'inventory/movement_form.html', {'asset': asset, 'form': form})
 
 
 @login_required
@@ -320,6 +696,9 @@ def asset_list(request):
 @admin_required
 def asset_create(request):
     form = AssetForm(request.POST or None)
+    if request.method == 'GET':
+        # New physical assets start in stock; assigning them is a separate history event.
+        form.initial['asset_status'] = Asset.Status.IN_STOCK
     if request.method == 'POST' and form.is_valid():
         asset = form.save()
         _record_asset_movement(request, asset, form, before=None)
@@ -337,6 +716,13 @@ def asset_edit(request, pk):
     asset = get_object_or_404(Asset.objects.select_related('employee'), pk=pk)
     before = Asset.objects.select_related('employee').get(pk=asset.pk)
     form = AssetForm(request.POST or None, instance=asset)
+    for protected_field in ('hr_code', 'asset_status', 'scrap_date', 'scrap_number'):
+        if protected_field in form.fields:
+            form.fields[protected_field].disabled = True
+    form.fields.pop('movement_date', None)
+    form.fields.pop('movement_reason', None)
+    form.fields['hr_code'].help_text = 'تغيير الموظف يتم من شاشة حركات العهدة لضمان حفظ التاريخ.'
+    form.fields['asset_status'].help_text = 'تغيير الحالة يتم من شاشة حركات العهدة لضمان حفظ التاريخ.'
     if request.method == 'POST' and form.is_valid():
         updated = form.save()
         _record_asset_movement(request, updated, form, before=before)

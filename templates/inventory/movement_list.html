@@ -1,0 +1,16 @@
+{% extends 'base.html' %}{% block content %}
+<div class="title-row page-heading"><div><p class="eyebrow">ADMIN · APPEND-ONLY HISTORY</p><h1>سجل حركات العهدة</h1><p>كل حركة تحفظ الموظف السابق والجديد وتاريخ الحركة والسبب والمنفذ؛ لا يتم استبدال الحركات القديمة.</p></div><a class="button" href="{% url 'movement_asset_search' %}">＋ تسجيل حركة جديدة</a></div>
+<div class="card"><form method="get" class="filter-form"><input name="q" value="{{ query }}" placeholder="السيريال أو الموديل أو HR Code أو رقم المستند"><select name="event_type"><option value="">كل أنواع الحركات</option>{% for value,label in event_types %}<option value="{{ value }}" {% if selected_event_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><button class="button">بحث</button><a class="button ghost" href="{% url 'movement_list' %}">مسح</a></form>
+<div class="result-count">عدد الحركات المطابقة: {{ movement_count }}</div>
+<div class="table-wrap"><table><thead><tr><th>تاريخ الحركة</th><th>الأصل</th><th>نوع الحركة</th><th>من الموظف</th><th>إلى الموظف</th><th>الحالة</th><th>السبب / المستند</th><th>نفّذها</th><th>وقت التسجيل</th></tr></thead><tbody>
+{% for movement in page.object_list %}<tr>
+<td>{{ movement.effective_date|date:'Y-m-d'|default:'غير متاح' }}</td>
+<td><b>{{ movement.asset.get_asset_type_display }}</b><small class="subline">{{ movement.asset.serial_number|default:movement.asset.model|default:movement.asset_id }}</small></td>
+<td>{{ movement.get_event_type_display }}</td>
+<td>{{ movement.from_display }}{% if movement.from_hr_code %}<small class="subline">HR {{ movement.from_hr_code }}</small>{% endif %}</td>
+<td>{{ movement.to_display }}{% if movement.to_hr_code %}<small class="subline">HR {{ movement.to_hr_code }}</small>{% endif %}</td>
+<td>{{ movement.from_status_display }} → {{ movement.to_status_display }}</td>
+<td>{{ movement.reason|default:'-' }}{% if movement.reference_number %}<small class="subline">مستند: {{ movement.reference_number }}</small>{% endif %}{% if movement.notes %}<small class="subline">{{ movement.notes|truncatechars:100 }}</small>{% endif %}</td>
+<td>{{ movement.created_by.username|default:'النظام / استيراد' }}</td><td>{{ movement.created_at|date:'Y-m-d H:i' }}</td>
+</tr>{% empty %}<tr><td colspan="9" class="empty-cell">لا توجد حركات مطابقة.</td></tr>{% endfor %}
+</tbody></table></div>{% include 'inventory/pagination.html' %}</div>{% endblock %}

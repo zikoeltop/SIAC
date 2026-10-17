@@ -13,6 +13,8 @@
   <div class="quick-actions">
     <a class="quick-action" href="{% url 'search_device' %}"><span class="action-icon">⌕</span><span><b>البحث عن عهدة</b><small>Serial Number أو HR Code</small></span><span class="arrow">←</span></a>
     {% if is_admin %}
+      <a class="quick-action" href="{% url 'inventory_dashboard' %}"><span class="action-icon">▥</span><span><b>Dashboard الإدارة</b><small>إحصائيات المخزون والموديلات والمشروعات</small></span><span class="arrow">←</span></a>
+      <a class="quick-action" href="{% url 'movement_list' %}"><span class="action-icon">⇄</span><span><b>حركات العهدة</b><small>تسليم ونقل وإرجاع وتخريد مع سجل تاريخي</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'asset_create' %}"><span class="action-icon">＋</span><span><b>إضافة أصل</b><small>جهاز أو طابعة أو شاشة أو ترخيص</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'employee_create' %}"><span class="action-icon">♙</span><span><b>إضافة موظف</b><small>إضافة مرجع موظف وربطه بالعهدة</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'inventory_export' %}"><span class="action-icon">⇩</span><span><b>تصدير Excel</b><small>تنزيل بيانات الموظفين والأصول</small></span><span class="arrow">←</span></a>

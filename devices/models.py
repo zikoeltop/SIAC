@@ -44,6 +44,7 @@ class Asset(models.Model):
 
     class Status(models.TextChoices):
         ACTIVE = 'active', 'Active / Custody'
+        IN_STOCK = 'in_stock', 'In Stock / المخزن'
         PENDING = 'pending', 'Pending'
         SCRAPPED = 'scrapped', 'Scrapped'
         ARCHIVED = 'archived', 'Archived'
@@ -121,7 +122,7 @@ class Asset(models.Model):
 
     @property
     def included_in_custody(self):
-        return self.asset_status == self.Status.ACTIVE and self.asset_type != self.Types.SCRAP
+        return self.asset_status == self.Status.ACTIVE and bool((self.hr_code or '').strip()) and self.asset_type != self.Types.SCRAP
 
     @property
     def display_employee_name(self):

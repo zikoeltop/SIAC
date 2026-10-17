@@ -58,3 +58,9 @@ The employee custody PDF uses WeasyPrint for correct Arabic/English bidirectiona
 - `Employee` now stores `Cost Center` and `Hiring Date` because both appear in the approved report. Migration `0006_employee_report_fields` adds these nullable/blank fields without deleting existing records.
 - Import maps `Cost Center` and `Hiring Date` from the ID worksheet (falling back to Employment Date or Contract Start Date only if Hiring Date is blank). Re-import the same workbook after deployment to populate these two new fields; the importer updates by HR Code and source sheet/row and retains manual entries.
 - HR search now prefetches movement histories in batches rather than querying movements separately for every matched asset, reducing the chance of a slow request while rendering employee history.
+
+## Latest update: custody movements and management dashboard
+
+This version adds controlled assign/transfer/return/scrap workflows, an admin-only management dashboard with per-model counts and Excel reporting, and immutable Audit Log / movement-history screens. See `CUSTODY_MOVEMENT_AND_DASHBOARD_UPDATE.md` for deployment and test steps.
+
+After deploying this version, run `python manage.py migrate` in the Railway Console before using the new workflows. No Excel re-import is required; existing employees, assets and movement rows are preserved.

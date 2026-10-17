@@ -1,13 +1,22 @@
 from django.contrib import messages
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.views import PasswordChangeView
+from django.contrib.auth.views import LoginView, PasswordChangeView
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from audit.utils import log_event
 from .decorators import admin_required
 from .forms import UserCreateForm, UserEditForm, SIACPasswordChangeForm
 from .models import User
+
+
+class SIACLoginView(LoginView):
+    template_name = 'registration/login.html'
+
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        log_event(self.request.user, 'LOGIN', self.request, 'User logged in to SIAC')
+        return response
 
 @login_required
 def logout_view(request):

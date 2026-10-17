@@ -14,6 +14,8 @@
       <a href="{% url 'dashboard' %}">الرئيسية</a>
       <a href="{% url 'search_device' %}">البحث عن عهدة</a>
       {% if user.is_admin_role %}
+        <a href="{% url 'inventory_dashboard' %}">Dashboard الإدارة</a>
+        <a href="{% url 'movement_list' %}">حركات العهدة</a>
         <a href="{% url 'asset_list' %}">الأصول</a>
         <a href="{% url 'employee_list' %}">الموظفون</a>
         <a href="{% url 'inventory_import' %}">استيراد الملف المرجعي</a>
