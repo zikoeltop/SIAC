@@ -15,9 +15,6 @@
 </div>
 
 <div class="dashboard-charts-grid">
-  <section class="card"><div class="section-heading"><div><h2>تغطية الفحص حسب المشروع</h2><p>مرتبة بحيث تظهر المشروعات ذات نسبة التغطية الأقل أولًا؛ التغطية هنا تاريخية وليست لزيارة واحدة.</p></div><a class="table-link" href="{% url 'site_visit_list' %}">عرض الزيارات ←</a></div>
-    {% for row in smart_project_rows %}<div class="smart-project-row"><div class="smart-project-heading"><a href="{% url 'project_inspection_dashboard' %}?project={{ row.project|urlencode }}">{{ row.project }}</a><strong>{{ row.coverage_percent }}%</strong></div><div class="bar-track"><i style="width:{{ row.coverage_percent }}%"></i></div><small>{{ row.ever_inspected }} من {{ row.total }} جهازًا لها فحص مكتمل · لم تُفحص: {{ row.never_inspected }}</small></div>{% empty %}<p class="empty-inline">لا توجد مشروعات مضافة في بيانات الأصول أو الموظفين بعد.</p>{% endfor %}
-  </section>
   <section class="card"><div class="section-heading"><div><h2>أحدث الزيارات</h2><p>حالة الزيارة وعدد الأجهزة التي اكتمل فحصها.</p></div><a class="table-link" href="{% url 'site_visit_create' %}">زيارة جديدة +</a></div>
     <div class="table-wrap"><table><thead><tr><th>المشروع</th><th>التاريخ</th><th>الفني</th><th>تم فحصها</th><th>الحالة</th></tr></thead><tbody>{% for visit in smart_recent_visits %}<tr><td><a class="table-link" href="{% url 'site_visit_detail' visit.pk %}">{{ visit.project }}</a></td><td>{{ visit.visit_date|date:'d/m/Y' }}</td><td>{{ visit.technician_name }}</td><td>{{ visit.inspected_total }}/{{ visit.inspection_total }}</td><td>{{ visit.get_status_display }}</td></tr>{% empty %}<tr><td colspan="5" class="empty-cell">لا توجد زيارات حتى الآن.</td></tr>{% endfor %}</tbody></table></div>
   </section>
@@ -28,6 +25,7 @@
   <div class="quick-actions">
     <a class="quick-action" href="{% url 'search_device' %}"><span class="action-icon">⌕</span><span><b>البحث عن عهدة</b><small>Serial Number أو HR Code</small></span><span class="arrow">←</span></a>
     <a class="quick-action" href="{% url 'site_visit_list' %}"><span class="action-icon">▦</span><span><b>سجل زيارات المشاريع</b><small>قوائم الفحص وDashboard كل مشروع</small></span><span class="arrow">←</span></a>
+    <a class="quick-action" href="{% url 'site_visit_list' %}"><span class="action-icon">▤</span><span><b>تغطية الفحص حسب المشروع</b><small>اختَر المشروع لعرض نسبة التغطية وتفاصيل الفحص</small></span><span class="arrow">←</span></a>
     {% if is_admin %}
       <a class="quick-action" href="{% url 'inventory_dashboard' %}"><span class="action-icon">▥</span><span><b>إدارة الأصول المتقدمة</b><small>المخزون والموديلات والماركات والفلاتر</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'movement_list' %}"><span class="action-icon">⇄</span><span><b>حركات العهدة</b><small>تسليم ونقل وإرجاع وتخريد مع سجل تاريخي</small></span><span class="arrow">←</span></a>
