@@ -19,6 +19,7 @@ from .inventory_services import import_inventory_workbook, preview_inventory_wor
 from .models import Asset, AssetMovement, Device, DeviceImport, Employee, PendingExcelImport, PendingInventoryImport
 from .services import create_pending_import, import_excel, normalize_serial
 from .pdf import build_pdf, build_custody_pdf
+from .site_visits import site_visit_global_metrics
 
 
 def _custody_assets(hr_code):
@@ -342,6 +343,7 @@ def dashboard(request):
         'employee_count': Employee.objects.count(),
         'is_admin': request.user.is_admin_role,
     }
+    context.update(site_visit_global_metrics())
     if request.user.is_admin_role:
         context['user_count'] = __import__('accounts.models', fromlist=['User']).User.objects.count()
     return render(request, 'devices/dashboard.html', context)
@@ -349,7 +351,9 @@ def dashboard(request):
 
 @admin_required
 def inventory_dashboard(request):
-    return render(request, 'inventory/admin_dashboard.html', _dashboard_context(request))
+    context = _dashboard_context(request)
+    context.update(site_visit_global_metrics())
+    return render(request, 'inventory/admin_dashboard.html', context)
 
 
 @admin_required

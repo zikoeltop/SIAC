@@ -1,0 +1,68 @@
+{% extends 'base.html' %}{% block content %}
+<section class="page-hero admin-dashboard-hero">
+  <div><p class="eyebrow">SIAC · PERIODIC INSPECTION</p><h1>{{ visit.project }}</h1><p>تاريخ الزيارة: <strong>{{ visit.visit_date|date:'d/m/Y' }}</strong> · الفني: <strong>{{ visit.technician_name }}</strong> · الحالة: <span class="status-pill {% if visit.status == 'completed' %}positive{% else %}warning{% endif %}">{{ visit.get_status_display }}</span></p><p>البيانات المعروضة في الزيارة عبارة عن نسخة فحص مستقلة؛ لا يتم تحديث جدول الأصول الأساسي.</p></div>
+  <div class="hero-actions"><a class="button" href="{% url 'project_inspection_dashboard' %}?project={{ visit.project|urlencode }}">Dashboard المشروع</a><a class="button ghost" href="{% url 'site_visit_export' visit.pk %}">تصدير Excel ↓</a></div>
+</section>
+
+{% if form_error %}<div class="msg error">{{ form_error }}</div>{% endif %}
+<div class="stats-grid dashboard-status-grid">
+  <div class="stat-card"><span class="stat-label">الأجهزة في القائمة</span><strong>{{ inspection_count }}</strong></div>
+  <div class="stat-card"><span class="stat-label">تم فحصها</span><strong>{{ inspected_count }}</strong></div>
+  <div class="stat-card"><span class="stat-label">لم تسجل نتيجة</span><strong>{{ pending_count }}</strong></div>
+  <div class="stat-card"><span class="stat-label">تعذر فحصها</span><strong>{{ unable_count }}</strong></div>
+</div>
+
+{% if visit.status != 'completed' %}
+<div class="card">
+  <div class="section-heading"><div><h2>إضافة جهاز من كل سجلات SIAC</h2><p>ابحث بالسيريال نمبر أو اسم الكمبيوتر أو الموديل. الأجهزة غير المسجلة على المشروع تظهر كأجهزة إضافية دون تعديل مشروعها في SIAC.</p></div></div>
+  <form method="get" class="filter-form">
+    <input name="q" value="{{ q }}" placeholder="Serial Number أو Computer Name أو Model" required>
+    <button class="button" type="submit">بحث عن جهاز</button>
+    {% if q %}<a class="button ghost" href="{% url 'site_visit_detail' visit.pk %}">مسح البحث</a>{% endif %}
+  </form>
+  {% if search_page %}<div class="result-count">نتائج البحث: {{ search_page.paginator.count }}</div><div class="table-wrap"><table><thead><tr><th>Project المسجل في SIAC</th><th>TYPE</th><th>MODEL</th><th>SERIAL NUMBER</th><th>COMPUTER NAME</th><th>USER NAME</th><th>الإجراء</th></tr></thead><tbody>
+    {% for asset in search_page.object_list %}<tr><td>{{ asset.project|default:'غير محدد' }}</td><td>{{ asset.get_asset_type_display }}</td><td>{{ asset.model|default:asset.item_type|default:'-' }}</td><td class="mono">{{ asset.serial_number|default:'-' }}</td><td class="mono">{{ asset.computer_name|default:asset.computer_name_new|default:'-' }}</td><td>{{ asset.display_employee_name }}</td><td>{% if asset.already_in_visit %}<span class="status-pill">موجود بالقائمة</span>{% else %}<form method="post" class="inline-form">{% csrf_token %}<input type="hidden" name="action" value="add_asset"><input type="hidden" name="asset_id" value="{{ asset.pk }}"><button class="button small" type="submit">{% if asset.is_additional_candidate %}إضافة كجهاز إضافي{% else %}إضافة للقائمة{% endif %}</button></form>{% endif %}</td></tr>{% empty %}<tr><td colspan="7" class="empty-cell">لا توجد أجهزة مطابقة. جرّب السيريال أو اسم الكمبيوتر.</td></tr>{% endfor %}
+  </tbody></table></div>{% endif %}
+</div>
+{% endif %}
+
+<div class="card inspection-card">
+  <div class="section-heading"><div><h2>قائمة الفحص الدوري</h2><p>كل جهاز يجب أن تكون له نتيجة «سليم» أو «يحتاج متابعة» أو «تعذر الفحص» قبل اعتماد الزيارة. سبب التعذر يُكتب في COMMENTS.</p></div><span class="type-pill">{{ inspection_count }} سجل فحص</span></div>
+  <div class="inspection-table-note">استخدم الحقول القابلة للتعديل لتسجيل القيمة التي اكتشفها الفني في الموقع. إذا تغيّرت قيمة، اكتب سبب التغيير في حقل السبب المقابل؛ سيضيف النظام ملاحظة تلقائية إلى COMMENTS، مع الاحتفاظ بقيمة SIAC الأصلية دون تعديلها.</div>
+  <div class="table-wrap inspection-table-wrap"><table class="inspection-table"><thead><tr><th>Project / Visit</th><th>USER NAME</th><th>TYPE</th><th>MODEL</th><th>SERIAL NUMBER</th><th>COMPUTER NAME</th><th>Monitor Model</th><th>Monitor Serial</th><th>printer model</th><th>printer serial</th><th>نتيجة الفحص</th><th>COMMENTS / حفظ</th></tr></thead><tbody>
+  {% for row in inspections %}
+    <tr class="{% if row.is_additional %}additional-inspection-row{% endif %}">
+      <td>
+        <form id="inspection-{{ row.pk }}" method="post">{% csrf_token %}<input type="hidden" name="action" value="save_inspection"><input type="hidden" name="inspection_id" value="{{ row.pk }}"></form>
+        <strong>{{ visit.project }}</strong><span class="subline">{{ visit.visit_date|date:'d/m/Y' }}</span><span class="subline">{{ visit.technician_name }}</span>
+        {% if row.is_additional %}<span class="status-pill warning">جهاز إضافي</span>{% endif %}
+        {% if row.source_project and row.source_project|lower != visit.project|lower %}<span class="subline">المشروع الأصلي: {{ row.source_project }}</span>{% endif %}
+      </td>
+      <td class="edit-cell">
+        <input class="inspection-input" form="inspection-{{ row.pk }}" name="user_name" value="{% if posted_row_id == row.pk %}{{ posted_row_data.user_name }}{% else %}{{ row.user_name }}{% endif %}" maxlength="255">
+        <span class="subline">قيمة SIAC الأصلية: {{ row.source_user_name|default:'-' }}</span>
+        <input class="reason-input" form="inspection-{{ row.pk }}" name="reason_user_name" value="{% if posted_row_id == row.pk %}{{ posted_row_data.reasons.user_name }}{% endif %}" placeholder="سبب التغيير عند التعديل">
+      </td>
+      <td>{{ row.type_snapshot|default:'-' }}</td><td>{{ row.model_snapshot|default:'-' }}</td><td class="mono">{{ row.serial_number_snapshot|default:'-' }}</td><td class="mono">{{ row.computer_name_snapshot|default:'-' }}</td>
+      <td class="edit-cell"><input class="inspection-input" form="inspection-{{ row.pk }}" name="monitor_model" value="{% if posted_row_id == row.pk %}{{ posted_row_data.monitor_model }}{% else %}{{ row.monitor_model }}{% endif %}" maxlength="255"><span class="subline">SIAC: {{ row.source_monitor_model|default:'-' }}</span><input class="reason-input" form="inspection-{{ row.pk }}" name="reason_monitor_model" value="{% if posted_row_id == row.pk %}{{ posted_row_data.reasons.monitor_model }}{% endif %}" placeholder="سبب التغيير"></td>
+      <td class="edit-cell"><input class="inspection-input" form="inspection-{{ row.pk }}" name="monitor_serial" value="{% if posted_row_id == row.pk %}{{ posted_row_data.monitor_serial }}{% else %}{{ row.monitor_serial }}{% endif %}" maxlength="255"><span class="subline">SIAC: {{ row.source_monitor_serial|default:'-' }}</span><input class="reason-input" form="inspection-{{ row.pk }}" name="reason_monitor_serial" value="{% if posted_row_id == row.pk %}{{ posted_row_data.reasons.monitor_serial }}{% endif %}" placeholder="سبب التغيير"></td>
+      <td class="edit-cell"><input class="inspection-input" form="inspection-{{ row.pk }}" name="printer_model" value="{% if posted_row_id == row.pk %}{{ posted_row_data.printer_model }}{% else %}{{ row.printer_model }}{% endif %}" maxlength="255"><span class="subline">SIAC: {{ row.source_printer_model|default:'-' }}</span><input class="reason-input" form="inspection-{{ row.pk }}" name="reason_printer_model" value="{% if posted_row_id == row.pk %}{{ posted_row_data.reasons.printer_model }}{% endif %}" placeholder="سبب التغيير"></td>
+      <td class="edit-cell"><input class="inspection-input" form="inspection-{{ row.pk }}" name="printer_serial" value="{% if posted_row_id == row.pk %}{{ posted_row_data.printer_serial }}{% else %}{{ row.printer_serial }}{% endif %}" maxlength="255"><span class="subline">SIAC: {{ row.source_printer_serial|default:'-' }}</span><input class="reason-input" form="inspection-{{ row.pk }}" name="reason_printer_serial" value="{% if posted_row_id == row.pk %}{{ posted_row_data.reasons.printer_serial }}{% endif %}" placeholder="سبب التغيير"></td>
+      <td><select class="inspection-status" form="inspection-{{ row.pk }}" name="status">
+        {% for value,label in inspection_status_choices %}<option value="{{ value }}" {% if posted_row_id == row.pk and posted_row_data.status == value %}selected{% elif posted_row_id != row.pk and row.status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select><span class="subline">{% if row.inspected_at %}آخر تسجيل: {{ row.inspected_at|date:'d/m/Y H:i' }}{% endif %}</span></td>
+      <td class="comments-cell"><textarea class="inspection-comments" form="inspection-{{ row.pk }}" name="comments" rows="3" maxlength="10000" placeholder="ملاحظات الفني أو سبب تعذر الفحص">{% if posted_row_id == row.pk %}{{ posted_row_data.comments }}{% else %}{{ row.comments }}{% endif %}</textarea>
+        {% if row.auto_comments %}<details class="auto-comments"><summary>ملاحظات التعديلات التلقائية</summary><pre>{{ row.auto_comments }}</pre></details>{% endif %}
+        {% if visit.status != 'completed' %}<button form="inspection-{{ row.pk }}" class="button small" type="submit">حفظ الفحص</button>{% endif %}
+      </td>
+    </tr>
+  {% empty %}<tr><td colspan="12" class="empty-cell">لا توجد أجهزة في قائمة الفحص. أضف جهازًا من البحث أو تحقق من اسم المشروع في بيانات SIAC.</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+
+<div class="card visit-finish-card">
+  <div class="section-heading"><div><h2>اعتماد الزيارة</h2><p>تُغلق الزيارة بعد تسجيل نتيجة لكل جهاز في القائمة. «تعذر الفحص» يحتاج إلى سبب في COMMENTS، ولا يُحسب كفحص مكتمل.</p></div></div>
+  {% if visit.status == 'completed' %}<div class="msg success">هذه الزيارة مكتملة ومقفولة{% if visit.completed_at %} بتاريخ {{ visit.completed_at|date:'d/m/Y H:i' }}{% endif %}. للتوثيق الجديد، أنشئ زيارة أخرى.</div>
+  {% else %}<form method="post" class="finish-visit-form">{% csrf_token %}<input type="hidden" name="action" value="complete_visit"><button class="button" type="submit">اعتماد وإغلاق الزيارة</button>{% if pending_count %}<span class="form-hint">متبقي {{ pending_count }} جهاز لم تُسجّل له نتيجة؛ لن يتم الإغلاق قبل إكمالها.</span>{% else %}<span class="form-hint">كل الأجهزة لها نتيجة، ويمكن إغلاق الزيارة.</span>{% endif %}</form>{% endif %}
+</div>
+{% endblock %}
