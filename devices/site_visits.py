@@ -484,7 +484,6 @@ def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=No
     }
 
 
-@login_required
 def _can_manage_visit(user, visit):
     """Only the visit creator (owner) and administrators may cancel/delete it."""
     is_admin = bool(
