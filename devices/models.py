@@ -268,6 +268,7 @@ class SiteVisit(models.Model):
     class Status(models.TextChoices):
         IN_PROGRESS = 'in_progress', 'جارية'
         COMPLETED = 'completed', 'مكتملة'
+        CANCELLED = 'cancelled', 'ملغاة'
 
     project = models.CharField(max_length=255, db_index=True, verbose_name='Project')
     visit_date = models.DateField(default=timezone.localdate, db_index=True, verbose_name='Visit Date')

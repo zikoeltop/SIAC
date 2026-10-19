@@ -376,6 +376,7 @@ def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=No
         'posted_row_data': posted_row_data or {},
         'form_error': form_error,
         'inspection_status_choices': SiteInspection.Status.choices,
+        'project_names': _project_names(),
         'inspection_count': inspections.count(),
         'inspected_count': inspections.filter(status__in=SUCCESS_STATUSES).count(),
         'pending_count': inspections.filter(status=SiteInspection.Status.PENDING).count(),
@@ -473,16 +474,73 @@ def site_visit_create(request):
     })
 
 
+def _can_manage_visit(user, visit):
+    """Only administrators and the user who created the visit can manage it."""
+    is_admin = bool(
+        getattr(user, 'is_superuser', False)
+        or getattr(user, 'is_staff', False)
+        or getattr(user, 'is_admin_role', False)
+        or getattr(user, 'role', '') == 'ADMIN'
+    )
+    return is_admin or (visit.created_by_id is not None and visit.created_by_id == user.pk)
+
+
 @login_required
 def site_visit_detail(request, pk):
     visit = get_object_or_404(SiteVisit.objects.select_related('created_by'), pk=pk)
-    if visit.status != SiteVisit.Status.COMPLETED:
+    if visit.status == SiteVisit.Status.IN_PROGRESS:
         _seed_project_assets(visit)
 
     if request.method == 'POST':
         action = (request.POST.get('action') or '').strip()
-        if visit.status == SiteVisit.Status.COMPLETED:
-            messages.error(request, 'الزيارة مكتملة ومقفولة. لا يمكن تغيير سجلها؛ أنشئ زيارة جديدة للتوثيق الجديد.')
+
+        # Management actions are allowed for the creator/admin even after completion.
+        if action in {'edit_visit', 'cancel_visit', 'delete_visit'}:
+            if not _can_manage_visit(request.user, visit):
+                return HttpResponseForbidden('إدارة الزيارة متاحة لمنشئ الزيارة أو مسؤول النظام فقط.')
+            if action == 'delete_visit':
+                visit_id, project = visit.pk, visit.project
+                log_event(request.user, 'SITE_VISIT_DELETE', request, f'Deleted site visit id={visit_id}, project={project}')
+                visit.delete()
+                messages.success(request, 'تم حذف الزيارة وقائمة الفحص التابعة لها.')
+                return redirect('site_visit_list')
+            if action == 'cancel_visit':
+                if visit.status == SiteVisit.Status.CANCELLED:
+                    messages.info(request, 'الزيارة ملغاة بالفعل.')
+                else:
+                    visit.status = SiteVisit.Status.CANCELLED
+                    visit.completed_at = timezone.now()
+                    visit.save(update_fields=['status', 'completed_at'])
+                    log_event(request.user, 'SITE_VISIT_CANCEL', request, f'Cancelled site visit id={visit.pk}, project={visit.project}')
+                    messages.success(request, 'تم إلغاء تسجيل الزيارة مع الاحتفاظ بسجلها للرجوع إليه.')
+                return redirect('site_visit_detail', pk=visit.pk)
+            if visit.status == SiteVisit.Status.CANCELLED:
+                messages.error(request, 'لا يمكن تعديل زيارة ملغاة.')
+                return redirect('site_visit_detail', pk=visit.pk)
+            project_text = (request.POST.get('project') or '').strip()
+            visit_date_text = (request.POST.get('visit_date') or '').strip()
+            technician_name = (request.POST.get('technician_name') or '').strip()
+            notes = (request.POST.get('notes') or '').strip()
+            valid_project = next((item for item in _project_names() if item.casefold() == project_text.casefold()), None)
+            try:
+                new_visit_date = date.fromisoformat(visit_date_text)
+            except ValueError:
+                new_visit_date = None
+            if not valid_project or not new_visit_date or not technician_name or len(technician_name) > 255:
+                messages.error(request, 'راجع المشروع والتاريخ واسم الفني؛ كل الحقول المطلوبة يجب أن تكون صحيحة.')
+                return redirect('site_visit_detail', pk=visit.pk)
+            old_project = visit.project
+            visit.project = valid_project
+            visit.visit_date = new_visit_date
+            visit.technician_name = technician_name
+            visit.notes = notes
+            visit.save(update_fields=['project', 'visit_date', 'technician_name', 'notes'])
+            log_event(request.user, 'SITE_VISIT_EDIT', request, f'Edited site visit id={visit.pk}, project {old_project} -> {visit.project}, date={visit.visit_date}')
+            messages.success(request, 'تم حفظ تعديلات بيانات الزيارة.')
+            return redirect('site_visit_detail', pk=visit.pk)
+
+        if visit.status in (SiteVisit.Status.COMPLETED, SiteVisit.Status.CANCELLED):
+            messages.error(request, 'الزيارة مكتملة أو ملغاة ومقفولة؛ لا يمكن تعديل الفحص أو الأجهزة.')
             return redirect('site_visit_detail', pk=visit.pk)
 
         if action == 'add_asset':
@@ -595,7 +653,9 @@ def site_visit_detail(request, pk):
         messages.error(request, 'الإجراء المطلوب غير معروف.')
         return redirect('site_visit_detail', pk=visit.pk)
 
-    return render(request, 'visits/site_visit_detail.html', _visit_detail_context(request, visit))
+    context = _visit_detail_context(request, visit)
+    context['can_manage_visit'] = _can_manage_visit(request.user, visit)
+    return render(request, 'visits/site_visit_detail.html', context)
 
 
 @login_required
