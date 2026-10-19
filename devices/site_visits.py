@@ -124,16 +124,24 @@ def _match_key(value):
 
 def _peripheral_map(assets):
     """Map monitors by Monitors 2!Siac ID and printers by Printers 2027!column C (User Name)."""
-    computer_codes = {
-        _match_key(asset.hr_code)
-        for asset in assets
-        if asset.asset_type == Asset.Types.COMPUTER and _match_key(asset.hr_code)
-    }
+    # The computer's SIAC/HR identifier may be stored in either hr_code or
+    # asset_tag depending on the source sheet. Build all nonblank aliases so
+    # the monitor's Monitors 2!Siac ID resolves to the same computer as custody search.
+    computer_codes = set()
+    for asset in assets:
+        if asset.asset_type != Asset.Types.COMPUTER:
+            continue
+        for value in (asset.hr_code, asset.asset_tag,
+                      asset.employee.hr_code if asset.employee_id else ''):
+            key = _match_key(value)
+            if key:
+                computer_codes.add(key)
     computer_names = set()
     for asset in assets:
         if asset.asset_type != Asset.Types.COMPUTER:
             continue
-        for name in (asset.employee_name, asset.employee.name if asset.employee_id else ''):
+        for name in (asset.display_employee_name, asset.employee_name,
+                     asset.employee.name if asset.employee_id else ''):
             key = _match_key(name)
             if key:
                 computer_names.add(key)
@@ -171,7 +179,8 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     printers = []
     if asset.asset_type == Asset.Types.COMPUTER:
         monitors = peripherals.get('monitors_by_siac_id', {}).get(code, [])
-        names = (asset.employee_name, asset.employee.name if asset.employee_id else '')
+        names = (asset.display_employee_name, asset.employee_name,
+                 asset.employee.name if asset.employee_id else '')
         for name in names:
             key = _match_key(name)
             if key:
