@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block content %}
+<section class="page-hero"><div><p class="eyebrow">PROJECT VISITS</p><h1>تسجيل زيارة جديدة</h1><p>حدد المشروع والتاريخ والفني القائم بالفحص.</p></div></section>
+<div class="card"><form method="post" class="form-grid">{% csrf_token %}
+<label>Project<select name="project" required><option value="">اختار المشروع</option>{% for p in projects %}<option value="{{ p }}">{{ p }}</option>{% endfor %}</select></label>
+<label>Visit Date<input type="date" name="visit_date" value="{{ today|date:'Y-m-d' }}" required></label>
+<label>IT TECH NAME<input type="text" name="technician_name" placeholder="اسم الفني" required></label>
+<div class="form-actions"><button class="button" type="submit">إنشاء الزيارة وفتح شيت الفحص</button><a class="button secondary" href="{% url 'visit_list' %}">إلغاء</a></div>
+</form></div>{% endblock %}

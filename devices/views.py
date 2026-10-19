@@ -336,15 +336,23 @@ def _dashboard_context(request, paginate=True):
 
 @login_required
 def dashboard(request):
+    from visits.models import Visit, VisitItem
+    projects = set(Asset.objects.exclude(project="").values_list("project", flat=True))
+    projects.update(Employee.objects.exclude(project="").values_list("project", flat=True))
+    visits = Visit.objects.all()
+    if not request.user.is_admin_role:
+        visits = visits.filter(Q(created_by=request.user) | Q(status=Visit.Status.APPROVED))
     context = {
-        'device_count': Device.objects.count(),
-        'asset_count': Asset.objects.count(),
-        'employee_count': Employee.objects.count(),
-        'is_admin': request.user.is_admin_role,
+        "projects": sorted((p.strip() for p in projects if p and p.strip()), key=str.casefold),
+        "selected_project": "",
+        "visits": visits.annotate(device_count=Count("items"))[:10],
+        "visit_count": visits.count(),
+        "approved_count": visits.filter(status=Visit.Status.APPROVED).count(),
+        "checked_count": VisitItem.objects.count(),
+        "asset_count": Asset.objects.exclude(asset_type=Asset.Types.SCRAP).count(),
+        "is_admin": request.user.is_admin_role,
     }
-    if request.user.is_admin_role:
-        context['user_count'] = __import__('accounts.models', fromlist=['User']).User.objects.count()
-    return render(request, 'devices/dashboard.html', context)
+    return render(request, "visits/dashboard.html", context)
 
 
 @admin_required

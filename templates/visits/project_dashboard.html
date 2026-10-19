@@ -1,0 +1,50 @@
+{% extends 'base.html' %}{% block content %}
+<section class="page-hero admin-dashboard-hero">
+  <div><p class="eyebrow">SIAC · SMART IT ASSET DASHBOARD</p><h1>{{ project }}</h1><p>ملخص الأصول والفحص الدوري للمشروع المختار. التغطية في الزيارة تعتمد فقط على الأجهزة التي سُجلت لها نتيجة فحص مكتملة.</p></div>
+  <a class="button" href="{% url 'site_visit_create' %}?project={{ project|urlencode }}">＋ إنشاء زيارة للمشروع</a>
+</section>
+<div class="card">
+  <form method="get" action="{% url 'project_inspection_dashboard' %}" class="project-picker-form project-dashboard-filter">
+    <div class="field"><label for="project">Project</label><select id="project" name="project" required>{% for project_name in project_names %}<option value="{{ project_name }}" {% if project_name|lower == project|lower %}selected{% endif %}>{{ project_name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="visit_id">الزيارة المعروضة</label><select id="visit_id" name="visit_id"><option value="">أحدث زيارة</option>{% for visit in project_visits %}<option value="{{ visit.pk }}" {% if selected_visit.pk == visit.pk %}selected{% endif %}>{{ visit.visit_date|date:'d/m/Y' }} · {{ visit.technician_name }} · {{ visit.get_status_display }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="from_date">من تاريخ (اختياري)</label><input type="date" id="from_date" name="from_date" value="{{ from_date_value }}"></div>
+    <div class="field"><label for="to_date">إلى تاريخ (اختياري)</label><input type="date" id="to_date" name="to_date" value="{{ to_date_value }}"></div>
+    <button class="button" type="submit">تحديث المؤشرات</button>
+  </form>
+</div>
+
+<div class="stats-grid dashboard-status-grid">
+  <div class="stat-card"><span class="stat-label">إجمالي أجهزة المشروع</span><strong>{{ project_assets_total }}</strong><span class="stat-icon">▣</span></div>
+  <div class="stat-card"><span class="stat-label">تم فحصها في الزيارة المحددة</span><strong>{{ inspected_this_visit }}</strong><span class="stat-icon">✓</span></div>
+  <div class="stat-card"><span class="stat-label">لم تسجل نتيجة فحص بالزيارة</span><strong>{{ not_inspected_this_visit }}</strong><span class="stat-icon">◷</span></div>
+  <div class="stat-card"><span class="stat-label">لم تُفحص إطلاقًا</span><strong>{{ never_inspected_count }}</strong><span class="stat-icon">!</span></div>
+  <div class="stat-card"><span class="stat-label">فُحصت أكثر من مرة</span><strong>{{ repeat_inspected_count }}</strong><span class="stat-icon">↻</span></div>
+  <div class="stat-card"><span class="stat-label">تحتاج إلى متابعة في الزيارة</span><strong>{{ needs_attention_this_visit }}</strong><span class="stat-icon">!</span></div>
+  <div class="stat-card"><span class="stat-label">نسبة تغطية الزيارة</span><strong>{{ coverage_percent }}%</strong><span class="stat-icon">◉</span></div>
+  <div class="stat-card"><span class="stat-label">لم تُفحص خلال الفترة المحددة</span><strong>{{ not_inspected_in_period }}</strong><span class="stat-icon">⌛</span></div>
+</div>
+<div class="dashboard-progress-card card">
+  <div class="section-heading"><div><h2>تغطية الفحص في الزيارة</h2><p>{% if selected_visit %}{{ selected_visit.visit_date|date:'d/m/Y' }} · {{ selected_visit.technician_name }}{% else %}لم تُنشأ زيارة لهذا المشروع بعد{% endif %}</p></div><strong class="coverage-number">{{ coverage_percent }}%</strong></div>
+  <div class="bar-track progress-large"><i style="width:{{ coverage_percent }}%"></i></div>
+  {% if selected_visit %}<p class="dashboard-note">حالة الزيارة: {{ selected_visit.get_status_display }} · الأجهزة التي تعذر فحصها: {{ current_unable_count }} · الأجهزة الإضافية: {{ current_additional_count }}. تعذر الفحص لا يُحسب ضمن الأجهزة المفحوصة.</p><div class="quick-actions"><a class="quick-action" href="{% url 'site_visit_detail' selected_visit.pk %}"><span class="action-icon">☷</span><span><b>فتح قائمة الفحص</b><small>استكمال النتائج أو مراجعة سجل الزيارة</small></span><span class="arrow">←</span></a><a class="quick-action" href="{% url 'site_visit_export' selected_visit.pk %}"><span class="action-icon">⇩</span><span><b>تصدير Excel</b><small>تنزيل الشيت بالعناوين المتفق عليها</small></span><span class="arrow">←</span></a></div>{% else %}<a class="button" href="{% url 'site_visit_create' %}?project={{ project|urlencode }}">إنشاء أول زيارة</a>{% endif %}
+</div>
+<div class="card dashboard-progress-card">
+  <div class="section-heading"><div><h2>تغطية الفحص خلال الفترة</h2><p>{% if from_date_value or to_date_value %}من {{ from_date_value|default:'بداية السجل' }} إلى {{ to_date_value|default:'اليوم' }}{% else %}كل السجل التاريخي (لم يتم تحديد نطاق زمني){% endif %}</p></div><strong class="coverage-number">{{ period_coverage_percent }}%</strong></div>
+  <div class="bar-track progress-large"><i style="width:{{ period_coverage_percent }}%"></i></div>
+  <p class="dashboard-note">تم العثور على فحص مكتمل خلال هذه الفترة لـ {{ period_checked_count }} من {{ project_assets_total }} جهازًا. الأجهزة التي لم يظهر لها فحص مكتمل خلال الفترة: {{ not_inspected_in_period }}.</p>
+</div>
+
+<div class="card">
+  <div class="section-heading"><div><h2>سجل الأجهزة والفحص التاريخي</h2><p>عدد مرات الفحص المكتملة وتاريخ آخر فحص لكل أصل داخل المشروع.</p></div><span class="type-pill">{{ project_assets_total }} جهاز</span></div>
+  <div class="table-wrap"><table><thead><tr><th>TYPE</th><th>MODEL</th><th>SERIAL NUMBER</th><th>COMPUTER NAME</th><th>USER NAME</th><th>عدد مرات الفحص</th><th>آخر فحص</th><th>حالة الزيارة المعروضة</th></tr></thead><tbody>
+    {% for row in asset_rows_page.object_list %}<tr><td>{{ row.type_snapshot }}</td><td>{{ row.asset.model|default:row.asset.item_type|default:'-' }}</td><td class="mono">{{ row.asset.serial_number|default:'-' }}</td><td class="mono">{{ row.asset.computer_name|default:row.asset.computer_name_new|default:'-' }}</td><td>{{ row.asset.display_employee_name }}</td><td><strong>{{ row.inspection_count }}</strong></td><td>{% if row.last_inspected %}{{ row.last_inspected|date:'d/m/Y' }}{% else %}—{% endif %}</td><td><span class="status-pill {% if row.current_status == 'inspected' %}positive{% elif row.current_status == 'needs_attention' %}warning{% elif row.current_status == 'unable' %}negative{% else %}{% endif %}">{% if row.current_status == 'pending' %}لم يتم الفحص{% elif row.current_status == 'inspected' %}سليم{% elif row.current_status == 'needs_attention' %}يحتاج متابعة{% elif row.current_status == 'unable' %}تعذر الفحص{% else %}—{% endif %}</span></td></tr>{% empty %}<tr><td colspan="8" class="empty-cell">لا توجد أصول مادية مسجلة لهذا المشروع حاليًا.</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if asset_rows_page.paginator.num_pages > 1 %}<div class="pagination">{% if asset_rows_page.has_previous %}<a href="?project={{ project|urlencode }}&visit_id={{ selected_visit.pk }}&from_date={{ from_date_value|urlencode }}&to_date={{ to_date_value|urlencode }}&page={{ asset_rows_page.previous_page_number }}">السابق</a>{% endif %}<span>صفحة {{ asset_rows_page.number }} من {{ asset_rows_page.paginator.num_pages }}</span>{% if asset_rows_page.has_next %}<a href="?project={{ project|urlencode }}&visit_id={{ selected_visit.pk }}&from_date={{ from_date_value|urlencode }}&to_date={{ to_date_value|urlencode }}&page={{ asset_rows_page.next_page_number }}">التالي</a>{% endif %}</div>{% endif %}
+</div>
+
+<div class="card"><div class="section-heading"><div><h2>آخر زيارات المشروع</h2><p>افتح أي زيارة لمراجعة كل جهاز ونتيجة فحصه.</p></div><a class="table-link" href="{% url 'site_visit_list' %}">كل الزيارات ←</a></div>
+  <div class="table-wrap"><table><thead><tr><th>التاريخ</th><th>الفني</th><th>الحالة</th><th>الأجهزة</th><th>تم فحصها</th><th>لم تسجل نتيجة</th><th></th></tr></thead><tbody>
+    {% for visit in recent_project_visits %}<tr><td>{{ visit.visit_date|date:'d/m/Y' }}</td><td>{{ visit.technician_name }}</td><td>{{ visit.get_status_display }}</td><td>{{ visit.inspection_total }}</td><td>{{ visit.inspected_total }}</td><td>{{ visit.pending_total }}</td><td><a class="table-link" href="{% url 'site_visit_detail' visit.pk %}">فتح</a></td></tr>{% empty %}<tr><td colspan="7" class="empty-cell">لا توجد زيارات سابقة لهذا المشروع.</td></tr>{% endfor %}
+  </tbody></table></div>
+</div>
+{% endblock %}

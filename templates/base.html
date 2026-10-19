@@ -13,6 +13,8 @@
     {% if user.is_authenticated %}
       <a href="{% url 'dashboard' %}">الرئيسية</a>
       <a href="{% url 'search_device' %}">البحث عن عهدة</a>
+      <a href="{% url 'project_dashboard' %}">Smart IT Asset Dashboard</a>
+      <a href="{% url 'visit_list' %}">سجل زيارات المشاريع</a>
       {% if user.is_admin_role %}
         <a href="{% url 'inventory_dashboard' %}">Dashboard الإدارة</a>
         <a href="{% url 'movement_list' %}">حركات العهدة</a>

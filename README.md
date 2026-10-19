@@ -64,3 +64,10 @@ The employee custody PDF uses WeasyPrint for correct Arabic/English bidirectiona
 This version adds controlled assign/transfer/return/scrap workflows, an admin-only management dashboard with per-model counts and Excel reporting, and immutable Audit Log / movement-history screens. See `CUSTODY_MOVEMENT_AND_DASHBOARD_UPDATE.md` for deployment and test steps.
 
 After deploying this version, run `python manage.py migrate` in the Railway Console before using the new workflows. No Excel re-import is required; existing employees, assets and movement rows are preserved.
+
+## Smart IT Asset Dashboard and project inspections
+- The home page is the Smart IT Asset Dashboard, with project-specific dashboard filtering and a project visit register.
+- New visits preload the computer inventory assigned to the selected project. A technician can additionally find assets by serial number or computer name, including assets whose source project field is blank or different.
+- Inspection rows keep visit-time snapshots of user, computer, monitor, and printer details. Overrides and their reasons are saved in inspection comments; the original inventory records are not changed.
+- Visit creator can edit visit details and rows after approval. Visit registration can be approved or cancelled; permanent visit deletion is restricted to Admin.
+- After deploying, run `python manage.py migrate` to create the inspection tables.

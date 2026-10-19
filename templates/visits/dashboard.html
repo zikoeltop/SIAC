@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block content %}
+<section class="page-hero"><div><p class="eyebrow">SIAC · SMART IT ASSET DASHBOARD</p><h1>{% if selected_project %}{{ selected_project }}{% else %}Smart IT Asset Dashboard{% endif %}</h1><p>لوحة متابعة الفحص الدوري وزيارات مشروعات المؤسسة.</p></div><a class="button" href="{% url 'visit_create' %}">＋ تسجيل زيارة</a></section>
+<div class="stats-grid">
+<div class="stat-card"><span class="stat-label">أجهزة قاعدة البيانات</span><strong>{{ asset_count }}</strong></div>
+<div class="stat-card"><span class="stat-label">الزيارات المعروضة</span><strong>{{ visit_count }}</strong></div>
+<div class="stat-card"><span class="stat-label">الزيارات المعتمدة</span><strong>{{ approved_count }}</strong></div>
+<div class="stat-card"><span class="stat-label">سجلات فحص الأجهزة</span><strong>{{ checked_count }}</strong></div>
+</div>
+<div class="card"><div class="section-heading"><div><h2>لوحة المشروع</h2><p>اختار المشروع لعرض زياراته ومؤشرات الفحص الخاصة به.</p></div></div>
+<form method="get" class="filter-form"><label>Project<select name="project" required><option value="">كل المشروعات</option>{% for p in projects %}<option value="{{ p }}" {% if p == selected_project %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></label><button class="button" type="submit">عرض المشروع</button><a class="button secondary" href="{% url 'visit_list' %}">سجل زيارات المشاريع</a></form></div>
+<div class="card"><div class="section-heading"><div><h2>آخر الزيارات</h2><p>اختار أي زيارة لعرض شيت الفحص وتفاصيلها.</p></div><a href="{% url 'visit_list' %}">عرض الكل ←</a></div>
+<div class="table-wrap"><table><thead><tr><th>Project</th><th>Visit Date</th><th>IT TECH NAME</th><th>عدد الأجهزة</th><th>الحالة</th><th></th></tr></thead><tbody>
+{% for v in visits %}{% if not selected_project or v.project == selected_project %}<tr><td>{{ v.project }}</td><td>{{ v.visit_date }}</td><td>{{ v.technician_name }}</td><td>{{ v.device_count }}</td><td>{{ v.get_status_display }}</td><td><a href="{% url 'visit_detail' v.pk %}">التفاصيل</a></td></tr>{% endif %}{% empty %}<tr><td colspan="6">لا توجد زيارات مسجلة حتى الآن.</td></tr>{% endfor %}
+</tbody></table></div></div>
+{% endblock %}

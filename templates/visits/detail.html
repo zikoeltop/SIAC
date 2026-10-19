@@ -1,0 +1,48 @@
+{% extends "base.html" %}{% block content %}
+<section class="page-hero"><div><p class="eyebrow">SIAC · VISIT INSPECTION</p><h1>{{ visit.project }}</h1><p>تاريخ الزيارة: {{ visit.visit_date }} · الفني: {{ visit.technician_name }} · الحالة: {{ visit.get_status_display }}</p></div><a class="button secondary" href="{% url 'visit_list' %}">سجل الزيارات</a> <a class="button" href="{% url 'visit_export' visit.pk %}">تصدير Excel</a></section>
+<div class="card"><div class="section-heading"><div><h2>بيانات الزيارة</h2><p>يتم حفظ نتائج الفحص كسجل مستقل ولا يتم تعديل قاعدة بيانات سياك الأساسية.</p></div></div>
+<div class="stats-grid"><div class="stat-card"><span class="stat-label">Project</span><strong style="font-size:1.2rem">{{ visit.project }}</strong></div><div class="stat-card"><span class="stat-label">Visit Date</span><strong style="font-size:1.2rem">{{ visit.visit_date }}</strong></div><div class="stat-card"><span class="stat-label">IT TECH NAME</span><strong style="font-size:1.2rem">{{ visit.technician_name }}</strong></div><div class="stat-card"><span class="stat-label">عدد الأجهزة</span><strong>{{ visit.items.count }}</strong></div></div>
+<div class="quick-actions">
+{% if can_approve and visit.status == "draft" %}<form method="post">{% csrf_token %}<button class="button" name="action" value="approve">اعتماد تسجيل الزيارة</button></form>{% endif %}
+{% if can_approve and visit.status != "cancelled" %}<form method="post" onsubmit="return confirm('هل تريد إلغاء تسجيل الزيارة؟');">{% csrf_token %}<button class="button secondary" name="action" value="cancel">إلغاء تسجيل الزيارة</button></form>{% endif %}
+{% if is_admin %}<form method="post" onsubmit="return confirm('حذف الزيارة نهائيًا؟ هذا الإجراء متاح للـ Admin فقط.');">{% csrf_token %}<button class="button danger" name="action" value="delete">حذف الزيارة (Admin)</button></form>{% endif %}
+</div></div>
+{% if can_edit %}{% if can_edit %}<div class="card"><div class="section-heading"><h2>تعديل بيانات الزيارة</h2></div><form method="post" class="form-grid">{% csrf_token %}<input type="hidden" name="action" value="update_visit"><label>Project<select name="project" required>{% for p in visit_projects %}<option value="{{ p }}" {% if p == visit.project %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></label><label>Visit Date<input type="date" name="visit_date" value="{{ visit.visit_date|date:'Y-m-d' }}" required></label><label>IT TECH NAME<input name="technician_name" value="{{ visit.technician_name }}" required></label><div class="form-actions"><button class="button" type="submit">حفظ تعديل الزيارة</button></div></form></div>{% endif %}
+<div class="card"><div class="section-heading"><div><h2>إضافة جهاز إلى شيت الفحص</h2><p>ابحث بالسيريال أو اسم الكمبيوتر، وستظهر بيانات الجهاز والعهدة المسجلة عليه لتراجعها قبل الحفظ.</p></div></div>
+<form method="post" id="inspection-form">{% csrf_token %}<input type="hidden" name="action" value="add_item">
+<div class="form-grid"><label>SERIAL NUMBER — البحث<input id="serial-search" name="serial_number" required placeholder="اكتب Serial Number أو Computer Name"></label><div class="form-actions"><button type="button" class="button" id="lookup-btn">بحث وتعبئة البيانات</button></div>
+<label>USER NAME<input id="user_name" name="user_name"></label><label>سبب تغيير USER NAME<input name="user_name_reason" placeholder="يُكتب فقط عند تغيير الاسم"></label>
+<label>TYPE<input id="device_type" name="device_type"></label><label>MODEL<input id="model" name="model"></label><label>COMPUTER NAME<input id="computer_name" name="computer_name"></label>
+<label>Monitor Model<input id="monitor_model" name="monitor_model"></label><label>سبب تغيير Monitor Model<input name="monitor_model_reason" placeholder="سبب التعديل"></label>
+<label>Monitor Serial<input id="monitor_serial" name="monitor_serial"></label><label>سبب تغيير Monitor Serial<input name="monitor_serial_reason" placeholder="سبب التعديل"></label>
+<label>printer model<input id="printer_model" name="printer_model"></label><label>سبب تغيير printer model<input name="printer_model_reason" placeholder="سبب التعديل"></label>
+<label>printer serial<input id="printer_serial" name="printer_serial"></label><label>سبب تغيير printer serial<input name="printer_serial_reason" placeholder="سبب التعديل"></label>
+<label class="wide">COMMENTS — ملاحظات الفني<textarea name="comments" rows="2" placeholder="ملاحظات إضافية خاصة بالجهاز"></textarea></label>
+<div id="lookup-message" class="wide notice">ابحث عن الجهاز أولًا قبل الحفظ. أي اختلاف في اسم المستخدم أو الشاشة أو الطابعة سيُسجل تلقائيًا في COMMENTS مع السبب.</div>
+<div class="form-actions wide"><button class="button" type="submit">إضافة إلى شيت الفحص</button></div></div></form></div>
+{% endif %}
+<div class="card"><div class="section-heading"><div><h2>شيت الفحص الدوري</h2><p>البحث داخل الأجهزة التي تم تسجيلها في هذه الزيارة.</p></div></div>
+<form method="get" class="filter-form"><label>بحث بالسيريال أو اسم الجهاز أو المستخدم<input name="q" value="{{ query }}" placeholder="Serial Number / Computer Name / User Name"></label><button class="button" type="submit">بحث</button></form>
+<div class="table-wrap"><table><thead><tr><th>Project</th><th>Visit Date</th><th>IT TECH NAME</th><th>USER NAME</th><th>TYPE</th><th>MODEL</th><th>SERIAL NUMBER</th><th>COMPUTER NAME</th><th>Monitor Model</th><th>Monitor Serial</th><th>printer model</th><th>printer serial</th><th>COMMENTS</th>{% if can_edit %}<th>إجراء</th>{% endif %}</tr></thead><tbody>
+{% for item in items %}<tr><td>{{ visit.project }}</td><td>{{ visit.visit_date }}</td><td>{{ visit.technician_name }}</td><td>{{ item.user_name }}</td><td>{{ item.device_type }}</td><td>{{ item.model }}</td><td>{{ item.serial_number }}</td><td>{{ item.computer_name }}</td><td>{{ item.monitor_model }}</td><td>{{ item.monitor_serial }}</td><td>{{ item.printer_model }}</td><td>{{ item.printer_serial }}</td><td style="white-space:pre-line">{{ item.comments }}</td>{% if can_edit %}<td><a href="{% url 'visit_item_edit' visit.pk item.pk %}">تعديل</a> <form method="post" onsubmit="return confirm('حذف الجهاز من شيت الزيارة؟');">{% csrf_token %}<input type="hidden" name="action" value="remove_item"><input type="hidden" name="item_id" value="{{ item.pk }}"><button class="button danger" type="submit">حذف</button></form></td>{% endif %}</tr>{% empty %}<tr><td colspan="14">لم تتم إضافة أجهزة إلى الزيارة حتى الآن.</td></tr>{% endfor %}
+</tbody></table></div></div>
+<script>
+(function(){
+ const btn=document.getElementById('lookup-btn'); if(!btn)return;
+ const search=document.getElementById('serial-search');
+ const msg=document.getElementById('lookup-message');
+ const fields=['user_name','device_type','model','serial_number','computer_name','monitor_model','monitor_serial','printer_model','printer_serial'];
+ btn.addEventListener('click', async function(){
+  const q=search.value.trim(); if(!q){msg.textContent='اكتب السيريال أو اسم الكمبيوتر أولًا.';return;}
+  msg.textContent='جاري البحث...';
+  try{
+   const r=await fetch('{% url "visit_device_lookup" %}?q='+encodeURIComponent(q),{headers:{'X-Requested-With':'XMLHttpRequest'}});
+   const data=await r.json();
+   if(!data.found){msg.textContent='لم يتم العثور على الجهاز. تأكد من السيريال أو اسم الكمبيوتر.';return;}
+   fields.forEach(k=>{const el=document.getElementById(k);if(el)el.value=data.device[k]||'';});
+   msg.textContent='تم العثور على الجهاز وتعبئة البيانات. راجع القيم، واكتب سبب أي تغيير في الحقول المخصصة لذلك.';
+  }catch(e){msg.textContent='تعذر البحث الآن. حاول مرة أخرى.';}
+ });
+})();
+</script>
+{% endblock %}

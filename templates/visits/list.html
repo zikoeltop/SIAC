@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block content %}
+<section class="page-hero"><div><p class="eyebrow">SIAC · PROJECT VISITS</p><h1>سجل زيارات المشاريع</h1><p>إنشاء الزيارات ومتابعة حالة التسجيل والفحص الدوري.</p></div><a class="button" href="{% url 'visit_create' %}">＋ تسجيل زيارة</a></section>
+<div class="card"><div class="section-heading"><h2>الزيارات المسجلة</h2><a href="{% url 'project_dashboard' %}">Smart IT Asset Dashboard</a></div>
+<div class="table-wrap"><table><thead><tr><th>Project</th><th>Visit Date</th><th>IT TECH NAME</th><th>الأجهزة المفحوصة</th><th>الحالة</th><th>منشئ الزيارة</th><th></th></tr></thead><tbody>
+{% for v in visits %}<tr><td>{{ v.project }}</td><td>{{ v.visit_date }}</td><td>{{ v.technician_name }}</td><td>{{ v.device_count }}</td><td>{{ v.get_status_display }}</td><td>{{ v.created_by.get_full_name|default:v.created_by.username }}</td><td><a href="{% url 'visit_detail' v.pk %}">التفاصيل</a></td></tr>{% empty %}<tr><td colspan="7">لا توجد زيارات حتى الآن.</td></tr>{% endfor %}
+</tbody></table></div></div>{% endblock %}

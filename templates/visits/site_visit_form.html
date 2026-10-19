@@ -1,0 +1,15 @@
+{% extends 'base.html' %}{% block content %}
+<section class="page-heading"><p class="eyebrow">SIAC · NEW SITE VISIT</p><h1>إنشاء زيارة مشروع جديدة</h1><p>سيُنشئ النظام قائمة فحص تلقائية بكل الأجهزة المادية المسجلة على المشروع. ويمكن إضافة أجهزة أخرى من كل سجلات SIAC أثناء الزيارة.</p></section>
+<div class="card form-card">
+  <form method="post">{% csrf_token %}
+    <div class="form-grid">
+      <div class="field"><label for="project">Project <span class="required">*</span></label><select id="project" name="project" required><option value="">اختَر المشروع</option>{% for project_name in project_names %}<option value="{{ project_name }}" {% if posted_values.project|lower == project_name|lower %}selected{% elif not posted_values and initial_project|lower == project_name|lower %}selected{% endif %}>{{ project_name }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="visit_date">VISIT DATE <span class="required">*</span></label><input type="date" id="visit_date" name="visit_date" value="{{ posted_values.visit_date|default:today }}" required></div>
+      <div class="field"><label for="technician_name">IT TECH NAME <span class="required">*</span></label><input type="text" id="technician_name" name="technician_name" maxlength="255" value="{{ posted_values.technician_name }}" required placeholder="اسم الفني القائم بالفحص"></div>
+      <div class="field wide"><label for="notes">ملاحظات الزيارة</label><textarea id="notes" name="notes" rows="3" maxlength="10000" placeholder="ملاحظات عامة عن الزيارة أو نطاق العمل">{{ posted_values.notes }}</textarea></div>
+    </div>
+    <div class="form-actions"><button class="button" type="submit">إنشاء الزيارة وتجهيز الأجهزة</button><a class="button ghost" href="{% url 'site_visit_list' %}">إلغاء</a></div>
+  </form>
+  <p class="form-hint">لن يتم تعديل بيانات الأصول الأساسية أثناء الفحص. كل القيم والتصحيحات تُحفظ في سجل الزيارة فقط.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block content %}
+<section class="page-hero"><div><p class="eyebrow">VISIT INSPECTION</p><h1>تعديل بيانات الجهاز</h1><p>{{ visit.project }} · {{ visit.visit_date }} · {{ item.serial_number }}</p></div></section>
+<div class="card"><p>التعديل ده بيحفظ نسخة الفحص داخل الزيارة فقط، ولا يغيّر سجل العهدة الأصلي في سياك.</p>
+<form method="post" class="form-grid">{% csrf_token %}
+<label>USER NAME<input name="user_name" value="{{ item.user_name }}"></label><label>سبب تغيير USER NAME<input name="user_name_reason" placeholder="سبب التغيير إن وجد"></label>
+<label>TYPE<input name="device_type" value="{{ item.device_type }}"></label><label>MODEL<input name="model" value="{{ item.model }}"></label>
+<label>SERIAL NUMBER<input name="serial_number" value="{{ item.serial_number }}"></label><label>COMPUTER NAME<input name="computer_name" value="{{ item.computer_name }}"></label>
+<label>Monitor Model<input name="monitor_model" value="{{ item.monitor_model }}"></label><label>سبب تغيير Monitor Model<input name="monitor_model_reason" placeholder="سبب التغيير إن وجد"></label>
+<label>Monitor Serial<input name="monitor_serial" value="{{ item.monitor_serial }}"></label><label>سبب تغيير Monitor Serial<input name="monitor_serial_reason" placeholder="سبب التغيير إن وجد"></label>
+<label>printer model<input name="printer_model" value="{{ item.printer_model }}"></label><label>سبب تغيير printer model<input name="printer_model_reason" placeholder="سبب التغيير إن وجد"></label>
+<label>printer serial<input name="printer_serial" value="{{ item.printer_serial }}"></label><label>سبب تغيير printer serial<input name="printer_serial_reason" placeholder="سبب التغيير إن وجد"></label>
+<label class="wide">COMMENTS إضافية<textarea name="comments" rows="3"></textarea></label>
+<div class="form-actions wide"><button class="button" type="submit">حفظ التعديل</button><a class="button secondary" href="{% url 'visit_detail' visit.pk %}">رجوع للزيارة</a></div></form></div>{% endblock %}
