@@ -102,7 +102,7 @@ def _match_key(value):
 
 
 def _peripheral_map(assets):
-<<<<<<< HEAD
+>>>>>>> branch-name
     """Map monitors by Monitors 2!Siac ID and printers by Printers 2027!column C (User Name)."""
     computer_codes = {
         _match_key(asset.hr_code)
