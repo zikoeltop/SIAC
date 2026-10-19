@@ -96,21 +96,68 @@ def _join_unique(values, max_length=255):
     return '; '.join(result)[:max_length]
 
 
+def _normalized_key(value):
+    """Normalize names/IDs from imported inventory columns for reliable matching."""
+    return ' '.join(str(value or '').strip().casefold().split())
+
+
+def _asset_person_keys(asset):
+    employee = getattr(asset, 'employee', None)
+    values = [
+        getattr(asset, 'hr_code', ''),
+        getattr(employee, 'hr_code', '') if employee else '',
+        getattr(asset, 'employee_name', ''),
+        getattr(employee, 'name', '') if employee else '',
+        getattr(asset, 'display_employee_name', ''),
+    ]
+    return {_normalized_key(value) for value in values if _normalized_key(value) and _normalized_key(value) != '-'}
+
+
 def _peripheral_map(assets):
-    codes = {(asset.hr_code or '').strip().casefold() for asset in assets if (asset.hr_code or '').strip()}
-    if not codes:
+    """Match peripherals to computers by employee identity and the monitor Siac ID.
+
+    Imported Monitor/Printer sheets don't always populate HR Code consistently.
+    Monitor records can instead identify the computer by Siac ID (asset_tag),
+    while Printers 2027 identifies the assigned user in its User Name column.
+    Use all available normalized identifiers without changing source assets.
+    """
+    computers = [asset for asset in assets if asset.asset_type == Asset.Types.COMPUTER]
+    if not computers:
         return {}
+
+    computer_keys = {}
+    lookup_keys = set()
+    for computer in computers:
+        keys = _asset_person_keys(computer)
+        for value in (computer.serial_number, computer.asset_tag, computer.computer_name, computer.computer_name_new):
+            normalized = _normalized_key(value)
+            if normalized and normalized != '-':
+                keys.add(normalized)
+        computer_keys[computer.pk] = keys
+        lookup_keys.update(keys)
+
     result = defaultdict(lambda: {'monitors': [], 'printers': []})
-    # Fetch physical asset rows once and case-fold HR codes in Python, so mixed-case codes match too.
-    related = Asset.objects.filter(asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]).exclude(
-        asset_status__in=EXCLUDED_STATUSES
-    ).exclude(hr_code='').select_related('employee').order_by('id')
-    for asset in related:
-        code = (asset.hr_code or '').strip().casefold()
-        if code not in codes:
+    related = Asset.objects.filter(
+        asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
+    ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
+
+    for peripheral in related:
+        keys = _asset_person_keys(peripheral)
+        # Monitors 2 column A is Siac ID; in the normalized Asset schema this
+        # is commonly asset_tag. It may refer to a computer serial/name/tag.
+        if peripheral.asset_type == Asset.Types.MONITOR:
+            tag = _normalized_key(peripheral.asset_tag)
+            if tag:
+                keys.add(tag)
+        matching_computers = []
+        for computer in computers:
+            if computer_keys[computer.pk] & keys:
+                matching_computers.append(computer)
+        if not matching_computers:
             continue
-        key = 'monitors' if asset.asset_type == Asset.Types.MONITOR else 'printers'
-        result[code][key].append(asset)
+        bucket = 'monitors' if peripheral.asset_type == Asset.Types.MONITOR else 'printers'
+        for computer in matching_computers:
+            result[computer.hr_code.strip().casefold() or f'asset:{computer.pk}'][bucket].append(peripheral)
     return result
 
 
@@ -121,7 +168,8 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     # user. Monitor/printer assets are also checklist rows in their own right,
     # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
     # duplicated into the peripheral columns on that same row.
-    matching = peripherals.get(code, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
+    matching_key = code or f'asset:{asset.pk}'
+    matching = peripherals.get(matching_key, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
 
@@ -150,6 +198,44 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
         'source_printer_serial': printer_serials,
         'printer_serial': printer_serials,
     }
+
+
+def _refresh_peripheral_snapshots(visit):
+    """Backfill peripheral snapshots for existing visits without overwriting edits."""
+    computer_rows = list(visit.inspections.filter(asset__asset_type=Asset.Types.COMPUTER).select_related('asset', 'asset__employee'))
+    if not computer_rows:
+        return
+    peripherals = _peripheral_map([row.asset for row in computer_rows])
+    fields = (
+        ('monitor_model', 'source_monitor_model'),
+        ('monitor_serial', 'source_monitor_serial'),
+        ('printer_model', 'source_printer_model'),
+        ('printer_serial', 'source_printer_serial'),
+    )
+    for row in computer_rows:
+        key = (row.asset.hr_code or '').strip().casefold() or f'asset:{row.asset_id}'
+        matched = peripherals.get(key, {'monitors': [], 'printers': []})
+        defaults = {
+            'source_monitor_model': _join_unique([item.model or item.item_type for item in matched['monitors']]),
+            'source_monitor_serial': _join_unique([item.serial_number for item in matched['monitors']]),
+            'source_printer_model': _join_unique([item.model or item.item_type for item in matched['printers']]),
+            'source_printer_serial': _join_unique([item.serial_number for item in matched['printers']]),
+        }
+        changed_fields = []
+        for current_field, source_field in fields:
+            new_source = defaults[source_field]
+            old_source = getattr(row, source_field) or ''
+            current_value = getattr(row, current_field) or ''
+            # Update empty/unmodified snapshots only. Technician edits remain untouched.
+            if current_value == old_source or not current_value:
+                if current_value != new_source:
+                    setattr(row, current_field, new_source)
+                    changed_fields.append(current_field)
+            if old_source != new_source:
+                setattr(row, source_field, new_source)
+                changed_fields.append(source_field)
+        if changed_fields:
+            row.save(update_fields=list(dict.fromkeys(changed_fields + ['updated_at'])))
 
 
 def _seed_project_assets(visit):
@@ -384,6 +470,17 @@ def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=No
 
 
 @login_required
+def _can_manage_visit(user, visit):
+    """Only the visit creator (owner) and administrators may cancel/delete it."""
+    is_admin = bool(
+        getattr(user, 'is_superuser', False)
+        or getattr(user, 'is_staff', False)
+        or getattr(user, 'is_admin_role', False)
+        or getattr(user, 'role', '') == 'ADMIN'
+    )
+    return is_admin or (visit.created_by_id is not None and visit.created_by_id == user.pk)
+
+
 def site_visit_list(request):
     query = (request.GET.get('q') or '').strip()
     visits = _site_visit_aggregate(SiteVisit.objects.select_related('created_by'))
@@ -476,12 +573,33 @@ def site_visit_create(request):
 @login_required
 def site_visit_detail(request, pk):
     visit = get_object_or_404(SiteVisit.objects.select_related('created_by'), pk=pk)
-    if visit.status != SiteVisit.Status.COMPLETED:
+    if visit.status == SiteVisit.Status.IN_PROGRESS:
         _seed_project_assets(visit)
+        _refresh_peripheral_snapshots(visit)
 
     if request.method == 'POST':
         action = (request.POST.get('action') or '').strip()
-        if visit.status == SiteVisit.Status.COMPLETED:
+        if action in {'cancel_visit', 'delete_visit'}:
+            if not _can_manage_visit(request.user, visit):
+                messages.error(request, 'إلغاء أو حذف الزيارة متاح لصاحب الزيارة أو مسؤول النظام فقط.')
+                return redirect('site_visit_detail', pk=visit.pk)
+            if action == 'cancel_visit':
+                if visit.status == SiteVisit.Status.CANCELLED:
+                    messages.info(request, 'الزيارة ملغاة بالفعل.')
+                else:
+                    visit.status = SiteVisit.Status.CANCELLED
+                    visit.completed_at = timezone.now()
+                    visit.save(update_fields=['status', 'completed_at'])
+                    log_event(request.user, 'SITE_VISIT_CANCEL', request, f'Cancelled site visit id={visit.pk}, project={visit.project}, date={visit.visit_date}')
+                    messages.success(request, 'تم إلغاء الزيارة. بياناتها محفوظة كسجل ملغى.')
+                return redirect('site_visit_detail', pk=visit.pk)
+            visit_id, visit_project, visit_date = visit.pk, visit.project, visit.visit_date
+            log_event(request.user, 'SITE_VISIT_DELETE', request, f'Deleted site visit id={visit_id}, project={visit_project}, date={visit_date}')
+            visit.delete()
+            messages.success(request, 'تم حذف الزيارة وقائمة الفحص التابعة لها.')
+            return redirect('site_visit_list')
+
+        if visit.status in (SiteVisit.Status.COMPLETED, SiteVisit.Status.CANCELLED):
             messages.error(request, 'الزيارة مكتملة ومقفولة. لا يمكن تغيير سجلها؛ أنشئ زيارة جديدة للتوثيق الجديد.')
             return redirect('site_visit_detail', pk=visit.pk)
 
@@ -595,7 +713,9 @@ def site_visit_detail(request, pk):
         messages.error(request, 'الإجراء المطلوب غير معروف.')
         return redirect('site_visit_detail', pk=visit.pk)
 
-    return render(request, 'visits/site_visit_detail.html', _visit_detail_context(request, visit))
+    context = _visit_detail_context(request, visit)
+    context['can_manage_visit'] = _can_manage_visit(request.user, visit)
+    return render(request, 'visits/site_visit_detail.html', context)
 
 
 @login_required

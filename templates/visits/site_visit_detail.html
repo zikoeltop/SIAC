@@ -1,7 +1,12 @@
 {% extends 'base.html' %}{% block content %}
 <section class="page-hero admin-dashboard-hero">
-  <div><p class="eyebrow">SIAC · PERIODIC INSPECTION</p><h1>{{ visit.project }}</h1><p>تاريخ الزيارة: <strong>{{ visit.visit_date|date:'d/m/Y' }}</strong> · الفني: <strong>{{ visit.technician_name }}</strong> · الحالة: <span class="status-pill {% if visit.status == 'completed' %}positive{% else %}warning{% endif %}">{{ visit.get_status_display }}</span></p><p>البيانات المعروضة في الزيارة عبارة عن نسخة فحص مستقلة؛ لا يتم تحديث جدول الأصول الأساسي.</p></div>
-  <div class="hero-actions"><a class="button" href="{% url 'project_inspection_dashboard' %}?project={{ visit.project|urlencode }}">Dashboard المشروع</a><a class="button ghost" href="{% url 'site_visit_export' visit.pk %}">تصدير Excel ↓</a></div>
+  <div><p class="eyebrow">SIAC · PERIODIC INSPECTION</p><h1>{{ visit.project }}</h1><p>تاريخ الزيارة: <strong>{{ visit.visit_date|date:'d/m/Y' }}</strong> · الفني: <strong>{{ visit.technician_name }}</strong> · الحالة: <span class="status-pill {% if visit.status == 'completed' %}positive{% elif visit.status == 'cancelled' %}negative{% else %}warning{% endif %}">{{ visit.get_status_display }}</span></p><p>البيانات المعروضة في الزيارة عبارة عن نسخة فحص مستقلة؛ لا يتم تحديث جدول الأصول الأساسي.</p></div>
+  <div class="hero-actions"><a class="button" href="{% url 'project_inspection_dashboard' %}?project={{ visit.project|urlencode }}">Dashboard المشروع</a><a class="button ghost" href="{% url 'site_visit_export' visit.pk %}">تصدير Excel ↓</a>
+  {% if can_manage_visit %}
+    {% if visit.status != 'cancelled' %}<form method="post" onsubmit="return confirm('هل تريد إلغاء الزيارة؟ ستظل محفوظة كسجل ملغى.');">{% csrf_token %}<input type="hidden" name="action" value="cancel_visit"><button class="button ghost" type="submit">إلغاء الزيارة</button></form>{% endif %}
+    <form method="post" onsubmit="return confirm('تأكيد حذف الزيارة نهائيًا مع قائمة الفحص التابعة لها؟');">{% csrf_token %}<input type="hidden" name="action" value="delete_visit"><button class="button danger" type="submit">حذف الزيارة</button></form>
+  {% endif %}
+</div>
 </section>
 
 {% if form_error %}<div class="msg error">{{ form_error }}</div>{% endif %}
@@ -12,7 +17,7 @@
   <div class="stat-card"><span class="stat-label">تعذر فحصها</span><strong>{{ unable_count }}</strong></div>
 </div>
 
-{% if visit.status != 'completed' %}
+{% if visit.status != 'completed' and visit.status != 'cancelled' %}
 <div class="card">
   <div class="section-heading"><div><h2>إضافة جهاز من كل سجلات SIAC</h2><p>ابحث بالسيريال نمبر أو اسم الكمبيوتر أو الموديل. الأجهزة غير المسجلة على المشروع تظهر كأجهزة إضافية دون تعديل مشروعها في SIAC.</p></div></div>
   <form method="get" class="filter-form">
@@ -53,7 +58,7 @@
       </select><span class="subline">{% if row.inspected_at %}آخر تسجيل: {{ row.inspected_at|date:'d/m/Y H:i' }}{% endif %}</span></td>
       <td class="comments-cell"><textarea class="inspection-comments" form="inspection-{{ row.pk }}" name="comments" rows="3" maxlength="10000" placeholder="ملاحظات الفني أو سبب تعذر الفحص">{% if posted_row_id == row.pk %}{{ posted_row_data.comments }}{% else %}{{ row.comments }}{% endif %}</textarea>
         {% if row.auto_comments %}<details class="auto-comments"><summary>ملاحظات التعديلات التلقائية</summary><pre>{{ row.auto_comments }}</pre></details>{% endif %}
-        {% if visit.status != 'completed' %}<button form="inspection-{{ row.pk }}" class="button small" type="submit">حفظ الفحص</button>{% endif %}
+        {% if visit.status != 'completed' and visit.status != 'cancelled' %}<button form="inspection-{{ row.pk }}" class="button small" type="submit">حفظ الفحص</button>{% endif %}
       </td>
     </tr>
   {% empty %}<tr><td colspan="12" class="empty-cell">لا توجد أجهزة في قائمة الفحص. أضف جهازًا من البحث أو تحقق من اسم المشروع في بيانات SIAC.</td></tr>{% endfor %}
@@ -62,7 +67,8 @@
 
 <div class="card visit-finish-card">
   <div class="section-heading"><div><h2>اعتماد الزيارة</h2><p>تُغلق الزيارة بعد تسجيل نتيجة لكل جهاز في القائمة. «تعذر الفحص» يحتاج إلى سبب في COMMENTS، ولا يُحسب كفحص مكتمل.</p></div></div>
-  {% if visit.status == 'completed' %}<div class="msg success">هذه الزيارة مكتملة ومقفولة{% if visit.completed_at %} بتاريخ {{ visit.completed_at|date:'d/m/Y H:i' }}{% endif %}. للتوثيق الجديد، أنشئ زيارة أخرى.</div>
+  {% if visit.status == 'cancelled' %}<div class="msg error">هذه الزيارة ملغاة ولا يمكن تعديلها. يمكنك إنشاء زيارة جديدة للتوثيق.</div>
+  {% elif visit.status == 'completed' %}<div class="msg success">هذه الزيارة مكتملة ومقفولة{% if visit.completed_at %} بتاريخ {{ visit.completed_at|date:'d/m/Y H:i' }}{% endif %}. للتوثيق الجديد، أنشئ زيارة أخرى.</div>
   {% else %}<form method="post" class="finish-visit-form">{% csrf_token %}<input type="hidden" name="action" value="complete_visit"><button class="button" type="submit">اعتماد وإغلاق الزيارة</button>{% if pending_count %}<span class="form-hint">متبقي {{ pending_count }} جهاز لم تُسجّل له نتيجة؛ لن يتم الإغلاق قبل إكمالها.</span>{% else %}<span class="form-hint">كل الأجهزة لها نتيجة، ويمكن إغلاق الزيارة.</span>{% endif %}</form>{% endif %}
 </div>
 {% endblock %}
