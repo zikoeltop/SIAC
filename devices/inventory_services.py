@@ -49,7 +49,7 @@ SHEET_CONFIGS = {
         'project_keys': ['Project', 'Original Project'],
         'sector_keys': ['Sector (from ID)'], 'department_keys': ['Department', 'Original Department'],
         'serial_keys': ['Serial'], 'item_keys': ['Size', 'Name'], 'brand_keys': ['Brand'],
-        'model_keys': ['Model'], 'asset_tag_keys': ['Asset Number'], 'status': Asset.Status.ACTIVE,
+        'model_keys': ['Model'], 'asset_tag_keys': ['Siac ID', 'Asset Number'], 'status': Asset.Status.ACTIVE,
     },
     'GStar': {
         'asset_type': Asset.Types.GSTAR,

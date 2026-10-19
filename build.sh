@@ -25,4 +25,6 @@ for weight in ('Regular', 'Bold'):
 PY
 
 python manage.py collectstatic --no-input
-python manage.py migrate
+# Generate any missing model migrations in the build image before applying them.
+python manage.py makemigrations --noinput
+python manage.py migrate --noinput

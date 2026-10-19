@@ -96,41 +96,71 @@ def _join_unique(values, max_length=255):
     return '; '.join(result)[:max_length]
 
 
+def _match_key(value):
+    """Normalize workbook join keys without treating blank values as a match."""
+    return ' '.join(str(value or '').strip().casefold().split())
+
+
 def _peripheral_map(assets):
-    codes = {(asset.hr_code or '').strip().casefold() for asset in assets if (asset.hr_code or '').strip()}
-    if not codes:
-        return {}
-    result = defaultdict(lambda: {'monitors': [], 'printers': []})
-    # Fetch physical asset rows once and case-fold HR codes in Python, so mixed-case codes match too.
-    related = Asset.objects.filter(asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]).exclude(
-        asset_status__in=EXCLUDED_STATUSES
-    ).exclude(hr_code='').select_related('employee').order_by('id')
-    for asset in related:
-        code = (asset.hr_code or '').strip().casefold()
-        if code not in codes:
+    """Map monitors by Monitors 2!Siac ID and printers by Printers 2027!column C (User Name)."""
+    computer_codes = {
+        _match_key(asset.hr_code)
+        for asset in assets
+        if asset.asset_type == Asset.Types.COMPUTER and _match_key(asset.hr_code)
+    }
+    computer_names = set()
+    for asset in assets:
+        if asset.asset_type != Asset.Types.COMPUTER:
             continue
-        key = 'monitors' if asset.asset_type == Asset.Types.MONITOR else 'printers'
-        result[code][key].append(asset)
+        for name in (asset.employee_name, asset.employee.name if asset.employee_id else ''):
+            key = _match_key(name)
+            if key:
+                computer_names.add(key)
+
+    result = {'monitors_by_siac_id': defaultdict(list), 'printers_by_user_name': defaultdict(list)}
+    if not computer_codes and not computer_names:
+        return result
+
+    related = Asset.objects.filter(
+        asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
+    ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
+
+    for peripheral in related:
+        if peripheral.asset_type == Asset.Types.MONITOR:
+            # Monitors 2 column A: Siac ID. The importer stores this value in asset_tag.
+            key = _match_key(peripheral.asset_tag)
+            if key and key in computer_codes:
+                result['monitors_by_siac_id'][key].append(peripheral)
+        elif peripheral.asset_type == Asset.Types.PRINTER:
+            # Printers 2027 column C is User Name. Never fall back to HR Code;
+            # blank continuation rows (often toner rows) must not join to a computer.
+            key = _match_key(peripheral.employee_name)
+            if key and key in computer_names:
+                result['printers_by_user_name'][key].append(peripheral)
     return result
 
 
 def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     peripherals = peripherals or {}
-    code = (asset.hr_code or '').strip().casefold()
-    # Monitor/printer columns describe peripherals assigned to the computer's
-    # user. Monitor/printer assets are also checklist rows in their own right,
-    # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
-    # duplicated into the peripheral columns on that same row.
-    matching = peripherals.get(code, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
-    monitors = matching.get('monitors', [])
-    printers = matching.get('printers', [])
+    code = _match_key(asset.hr_code)
+    # Peripheral values are shown on computer rows only. The source keys are
+    # deliberately different: Monitors 2 column A (Siac ID), and Printers 2027
+    # column C (User Name). Never use HR Code to associate printers.
+    monitors = []
+    printers = []
+    if asset.asset_type == Asset.Types.COMPUTER:
+        monitors = peripherals.get('monitors_by_siac_id', {}).get(code, [])
+        names = (asset.employee_name, asset.employee.name if asset.employee_id else '')
+        for name in names:
+            key = _match_key(name)
+            if key:
+                printers = peripherals.get('printers_by_user_name', {}).get(key, [])
+                if printers:
+                    break
 
-    # SIAC workbook field mapping for the peripheral columns:
-    # - Monitors 2: Brand -> Monitor Model, Serial -> Monitor Serial.
-    # - Printers 2027: column H (Model) -> printer model, column I (Serial Number)
-    #   -> printer serial. The inventory importer stores these in Asset.model and
-    #   Asset.serial_number respectively.
-    monitor_models = _join_unique([item.brand for item in monitors])
+    # Workbook fields: monitor model uses Brand (fallback Model), monitor serial
+    # uses Serial; printer model uses Model and printer serial uses Serial Number.
+    monitor_models = _join_unique([item.brand or item.model for item in monitors])
     monitor_serials = _join_unique([item.serial_number for item in monitors])
     printer_models = _join_unique([item.model for item in printers])
     printer_serials = _join_unique([item.serial_number for item in printers])
