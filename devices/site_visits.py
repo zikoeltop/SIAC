@@ -137,6 +137,7 @@ def _peripheral_map(assets):
         lookup_keys.update(keys)
 
     result = defaultdict(lambda: {'monitors': [], 'printers': []})
+
     related = Asset.objects.filter(
         asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
     ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
@@ -158,6 +159,7 @@ def _peripheral_map(assets):
         bucket = 'monitors' if peripheral.asset_type == Asset.Types.MONITOR else 'printers'
         for computer in matching_computers:
             result[computer.hr_code.strip().casefold() or f'asset:{computer.pk}'][bucket].append(peripheral)
+
     return result
 
 
@@ -170,6 +172,7 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     # duplicated into the peripheral columns on that same row.
     matching_key = code or f'asset:{asset.pk}'
     matching = peripherals.get(matching_key, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
+
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
 
