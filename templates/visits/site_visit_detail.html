@@ -7,8 +7,8 @@
     {% if can_cancel_visit and visit.status != 'cancelled' %}
       <form method="post" onsubmit="return confirm('هل تريد إلغاء تسجيل الزيارة؟ سيظل السجل محفوظًا.');">{% csrf_token %}<input type="hidden" name="action" value="cancel_visit"><button class="button ghost" type="submit">إلغاء تسجيل الزيارة</button></form>
     {% endif %}
-    {% if is_admin %}
-      <form method="post" onsubmit="return confirm('تأكيد حذف سجل الزيارة نهائيًا؟ سيتم حذف تفاصيل الفحص التابعة لها.');">{% csrf_token %}<input type="hidden" name="action" value="delete_visit"><button class="button danger" type="submit">حذف الزيارة (Admin)</button></form>
+    {% if can_delete_visit %}
+      <form method="post" onsubmit="return confirm('تأكيد حذف سجل الزيارة نهائيًا؟ سيتم حذف تفاصيل الفحص التابعة لها.');">{% csrf_token %}<input type="hidden" name="action" value="delete_visit"><button class="button danger" type="submit">حذف الزيارة نهائيًا</button></form>
     {% endif %}
   </div>
 </section>

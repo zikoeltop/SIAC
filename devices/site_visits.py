@@ -125,9 +125,14 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
 
-    monitor_models = _join_unique([(item.model or item.item_type) for item in monitors])
+    # SIAC workbook field mapping for the peripheral columns:
+    # - Monitors 2: Brand -> Monitor Model, Serial -> Monitor Serial.
+    # - Printers 2027: column H (Model) -> printer model, column I (Serial Number)
+    #   -> printer serial. The inventory importer stores these in Asset.model and
+    #   Asset.serial_number respectively.
+    monitor_models = _join_unique([item.brand for item in monitors])
     monitor_serials = _join_unique([item.serial_number for item in monitors])
-    printer_models = _join_unique([(item.model or item.item_type) for item in printers])
+    printer_models = _join_unique([item.model for item in printers])
     printer_serials = _join_unique([item.serial_number for item in printers])
     user_name = _asset_display_name(asset)
     return {
@@ -497,10 +502,10 @@ def site_visit_detail(request, pk):
                 messages.success(request, 'تم إلغاء تسجيل الزيارة مع الاحتفاظ بسجل الفحص.')
             return redirect('site_visit_detail', pk=visit.pk)
 
-        # Permanent deletion is restricted to Admin and requires POST/CSRF.
+        # Permanent deletion is available only to the visit creator or Admin; POST/CSRF required.
         if action == 'delete_visit':
-            if not is_admin:
-                return HttpResponseForbidden('حذف سجل الزيارة متاح للـ Admin فقط.')
+            if not (is_admin or is_creator):
+                return HttpResponseForbidden('حذف سجل الزيارة متاح لمنشئ الزيارة أو الـ Admin فقط.')
             visit_id, project = visit.pk, visit.project
             log_event(request.user, 'SITE_VISIT_DELETE', request, f'Deleted site visit id={visit_id}, project={project}')
             visit.delete()
@@ -625,6 +630,7 @@ def site_visit_detail(request, pk):
     context.update({
         'is_admin': bool(getattr(request.user, 'is_admin_role', False)),
         'can_cancel_visit': bool(getattr(request.user, 'is_admin_role', False) or visit.created_by_id == request.user.id),
+        'can_delete_visit': bool(getattr(request.user, 'is_admin_role', False) or visit.created_by_id == request.user.id),
     })
     return render(request, 'visits/site_visit_detail.html', context)
 

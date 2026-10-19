@@ -161,6 +161,44 @@ class SiteVisitInspectionWorkflowTests(TestCase):
         )
         self.assertEqual(visit.status, SiteVisit.Status.IN_PROGRESS)
 
+    def test_visit_creator_can_cancel_and_delete_visit(self):
+        visit = SiteVisit.objects.create(
+            project='Project Alpha', visit_date=date(2026, 10, 18),
+            technician_name='IT Tech One', created_by=self.regular,
+        )
+        url = reverse('site_visit_detail', args=[visit.pk])
+        response = self.client.post(url, {'action': 'cancel_visit'})
+        self.assertEqual(response.status_code, 302)
+        visit.refresh_from_db()
+        self.assertEqual(visit.status, SiteVisit.Status.CANCELLED)
+
+        response = self.client.post(url, {'action': 'delete_visit'})
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(SiteVisit.objects.filter(pk=visit.pk).exists())
+
+    def test_non_creator_non_admin_cannot_delete_visit(self):
+        visit = SiteVisit.objects.create(
+            project='Project Alpha', visit_date=date(2026, 10, 18),
+            technician_name='IT Tech One', created_by=self.admin,
+        )
+        response = self.client.post(reverse('site_visit_detail', args=[visit.pk]), {
+            'action': 'delete_visit',
+        })
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(SiteVisit.objects.filter(pk=visit.pk).exists())
+
+    def test_non_creator_non_admin_cannot_cancel_visit(self):
+        visit = SiteVisit.objects.create(
+            project='Project Alpha', visit_date=date(2026, 10, 18),
+            technician_name='IT Tech One', created_by=self.admin,
+        )
+        response = self.client.post(reverse('site_visit_detail', args=[visit.pk]), {
+            'action': 'cancel_visit',
+        })
+        self.assertEqual(response.status_code, 403)
+        visit.refresh_from_db()
+        self.assertNotEqual(visit.status, SiteVisit.Status.CANCELLED)
+
     def test_global_search_adds_other_project_asset_without_changing_asset(self):
         visit = SiteVisit.objects.create(
             project='Project Alpha', visit_date=date(2026, 10, 18),
