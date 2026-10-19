@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from audit.utils import log_event
-from .models import Asset, AssetMovement, Device, DeviceImport, Employee, SiteInspection, SiteVisit
+from .models import Asset, AssetMovement, Device, DeviceImport, Employee
 
 
 @admin.register(Device)
@@ -125,37 +125,3 @@ class AssetMovementAdmin(admin.ModelAdmin):
 
     def has_view_permission(self, request, obj=None):
         return request.user.is_active and request.user.is_staff
-
-
-@admin.register(SiteVisit)
-class SiteVisitAdmin(admin.ModelAdmin):
-    list_display = ('visit_date', 'project', 'technician_name', 'status', 'created_by', 'created_at')
-    search_fields = ('project', 'technician_name', 'notes')
-    list_filter = ('status', 'visit_date', 'project')
-    readonly_fields = tuple(field.name for field in SiteVisit._meta.fields)
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-
-@admin.register(SiteInspection)
-class SiteInspectionAdmin(admin.ModelAdmin):
-    list_display = ('visit', 'serial_number_snapshot', 'type_snapshot', 'user_name', 'status', 'is_additional', 'inspected_at')
-    search_fields = ('serial_number_snapshot', 'computer_name_snapshot', 'user_name', 'visit__project', 'auto_comments')
-    list_filter = ('status', 'is_additional', 'visit__project', 'visit__visit_date')
-    readonly_fields = tuple(field.name for field in SiteInspection._meta.fields)
-
-    def has_add_permission(self, request):
-        return False
-
-    def has_change_permission(self, request, obj=None):
-        return False
-
-    def has_delete_permission(self, request, obj=None):
-        return False

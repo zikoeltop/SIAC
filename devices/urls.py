@@ -1,7 +1,4 @@
 from django.urls import path
-from .site_visits import (
-    project_inspection_dashboard, site_visit_create, site_visit_detail, site_visit_export, site_visit_list,
-)
 from .views import (
     asset_create, asset_edit, asset_list, dashboard, download_custody_report,
     download_report, employee_create, employee_edit, employee_list, excel_preview,
@@ -10,11 +7,6 @@ from .views import (
 )
 
 urlpatterns = [
-    path('site-visits/', site_visit_list, name='site_visit_list'),
-    path('site-visits/project-dashboard/', project_inspection_dashboard, name='project_inspection_dashboard'),
-    path('site-visits/new/', site_visit_create, name='site_visit_create'),
-    path('site-visits/<int:pk>/', site_visit_detail, name='site_visit_detail'),
-    path('site-visits/<int:pk>/export.xlsx', site_visit_export, name='site_visit_export'),
     path('search/', search_device, name='search_device'),
     path('custody-report/<str:hr_code>/', download_custody_report, name='download_custody_report'),
     path('report/<int:pk>/', download_report, name='download_report'),

@@ -1,33 +1,19 @@
 {% extends 'base.html' %}{% block content %}
-<section class="page-hero admin-dashboard-hero">
-  <div><p class="eyebrow">SIAC · SMART IT ASSET DASHBOARD</p><h1>لوحة متابعة أصول تكنولوجيا المعلومات</h1><p>مرحبًا {{ user.get_full_name|default:user.username }}. متابعة إجمالية للأصول والفحص الدوري وزيارات المشروعات من مكان واحد.</p></div>
-  <div class="hero-actions"><a class="button" href="{% url 'site_visit_list' %}">سجل زيارات المشاريع ←</a><a class="button ghost" href="{% url 'search_device' %}">البحث عن عهدة</a></div>
+<section class="page-hero">
+  <div><p class="eyebrow">SIAC · IT ASSET MANAGEMENT</p><h1>نظام إدارة عهدة وأصول تكنولوجيا المعلومات</h1><p>مرحبًا {{ user.get_full_name|default:user.username }}، استخدم البحث للوصول إلى عهدة موظف أو بيانات أصل.</p></div>
+  <a class="button" href="{% url 'search_device' %}">البحث عن عهدة <span aria-hidden="true">←</span></a>
 </section>
-
-<div class="stats-grid dashboard-status-grid">
-  <div class="stat-card"><span class="stat-label">إجمالي الأجهزة المادية المتتبعة</span><strong>{{ smart_asset_count }}</strong><span class="stat-icon">▣</span></div>
-  <div class="stat-card"><span class="stat-label">الزيارات المسجلة</span><strong>{{ smart_visit_count }}</strong><span class="stat-icon">▦</span></div>
-  <div class="stat-card"><span class="stat-label">أجهزة لها فحص مكتمل</span><strong>{{ smart_ever_inspected_count }}</strong><span class="stat-icon">✓</span></div>
-  <div class="stat-card"><span class="stat-label">لم تُفحص إطلاقًا</span><strong>{{ smart_never_inspected_count }}</strong><span class="stat-icon">!</span></div>
-  <div class="stat-card"><span class="stat-label">فُحصت أكثر من مرة</span><strong>{{ smart_repeat_inspected_count }}</strong><span class="stat-icon">↻</span></div>
-  <div class="stat-card"><span class="stat-label">تحتاج إلى متابعة</span><strong>{{ smart_needs_attention_count }}</strong><span class="stat-icon">!</span></div>
-  <div class="stat-card"><span class="stat-label">زيارات مفتوحة</span><strong>{{ smart_open_visit_count }}</strong><span class="stat-icon">◷</span></div>
+<div class="stats-grid">
+  <div class="stat-card"><span class="stat-label">سجلات الأصول</span><strong>{{ asset_count }}</strong><span class="stat-icon">▣</span></div>
+  <div class="stat-card"><span class="stat-label">الموظفون</span><strong>{{ employee_count }}</strong><span class="stat-icon">♙</span></div>
+  {% if is_admin %}<div class="stat-card"><span class="stat-label">مستخدمو النظام</span><strong>{{ user_count }}</strong><span class="stat-icon">⚙</span></div>{% endif %}
 </div>
-
-<div class="dashboard-charts-grid">
-  <section class="card"><div class="section-heading"><div><h2>أحدث الزيارات</h2><p>حالة الزيارة وعدد الأجهزة التي اكتمل فحصها.</p></div><a class="table-link" href="{% url 'site_visit_create' %}">زيارة جديدة +</a></div>
-    <div class="table-wrap"><table><thead><tr><th>المشروع</th><th>التاريخ</th><th>الفني</th><th>تم فحصها</th><th>الحالة</th></tr></thead><tbody>{% for visit in smart_recent_visits %}<tr><td><a class="table-link" href="{% url 'site_visit_detail' visit.pk %}">{{ visit.project }}</a></td><td>{{ visit.visit_date|date:'d/m/Y' }}</td><td>{{ visit.technician_name }}</td><td>{{ visit.inspected_total }}/{{ visit.inspection_total }}</td><td>{{ visit.get_status_display }}</td></tr>{% empty %}<tr><td colspan="5" class="empty-cell">لا توجد زيارات حتى الآن.</td></tr>{% endfor %}</tbody></table></div>
-  </section>
-</div>
-
 <div class="card">
-  <div class="section-heading"><div><h2>الوصول السريع</h2><p>وظائف SIAC الأساسية إلى جانب متابعة الزيارات.</p></div></div>
+  <div class="section-heading"><div><h2>الوصول السريع</h2><p>عمليات النظام حسب صلاحيات المستخدم.</p></div></div>
   <div class="quick-actions">
     <a class="quick-action" href="{% url 'search_device' %}"><span class="action-icon">⌕</span><span><b>البحث عن عهدة</b><small>Serial Number أو HR Code</small></span><span class="arrow">←</span></a>
-    <a class="quick-action" href="{% url 'site_visit_list' %}"><span class="action-icon">▦</span><span><b>سجل زيارات المشاريع</b><small>قوائم الفحص وDashboard كل مشروع</small></span><span class="arrow">←</span></a>
-    <a class="quick-action" href="{% url 'site_visit_list' %}"><span class="action-icon">▤</span><span><b>تغطية الفحص حسب المشروع</b><small>اختَر المشروع لعرض نسبة التغطية وتفاصيل الفحص</small></span><span class="arrow">←</span></a>
     {% if is_admin %}
-      <a class="quick-action" href="{% url 'inventory_dashboard' %}"><span class="action-icon">▥</span><span><b>إدارة الأصول المتقدمة</b><small>المخزون والموديلات والماركات والفلاتر</small></span><span class="arrow">←</span></a>
+      <a class="quick-action" href="{% url 'inventory_dashboard' %}"><span class="action-icon">▥</span><span><b>Dashboard الإدارة</b><small>إحصائيات المخزون والموديلات والمشروعات</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'movement_list' %}"><span class="action-icon">⇄</span><span><b>حركات العهدة</b><small>تسليم ونقل وإرجاع وتخريد مع سجل تاريخي</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'asset_create' %}"><span class="action-icon">＋</span><span><b>إضافة أصل</b><small>جهاز أو طابعة أو شاشة أو ترخيص</small></span><span class="arrow">←</span></a>
       <a class="quick-action" href="{% url 'employee_create' %}"><span class="action-icon">♙</span><span><b>إضافة موظف</b><small>إضافة مرجع موظف وربطه بالعهدة</small></span><span class="arrow">←</span></a>
@@ -35,5 +21,5 @@
     {% endif %}
   </div>
 </div>
-{% if is_admin %}<div class="notice">استيراد الملف المرجعي يحدث سجلات الموظفين والأصول المستوردة باستخدام اسم الشيت ورقم الصف، ولا يحذف السجلات التي أُضيفت يدويًا من الموقع. سجل الفحص الدوري منفصل عن بيانات الأصول الأساسية.</div>{% endif %}
+{% if is_admin %}<div class="notice">استيراد الملف المرجعي يحدث سجلات الموظفين والأصول المستوردة باستخدام اسم الشيت ورقم الصف، ولا يحذف السجلات التي أُضيفت يدويًا من الموقع.</div>{% endif %}
 {% endblock %}

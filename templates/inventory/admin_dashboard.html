@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block content %}
 <section class="page-hero admin-dashboard-hero">
-  <div><p class="eyebrow">SIAC · SMART IT ASSET DASHBOARD</p><h1>Smart IT Asset Dashboard</h1><p>لوحة موحدة للأصول والمخزون وحالة الفحص الدوري وزيارات المشروعات، بالإضافة إلى الموديلات والماركات.</p></div>
+  <div><p class="eyebrow">SIAC · MANAGEMENT DASHBOARD</p><h1>لوحة مؤشرات إدارة الأصول</h1><p>ملخص الحالة الحالية للمخزون، والعهد النشطة، والموديلات، وتوزيع الأجهزة حسب المشروع والإدارة.</p></div>
   <a class="button" href="{% url 'movement_list' %}">إدارة حركات العهدة ←</a>
 </section>
 
@@ -18,27 +18,6 @@
   <a class="stat-card device-stat" href="?model_type=laptop"><span class="stat-label">أجهزة Laptop</span><strong>{{ laptop_count }}</strong><small>اضغط لعرض الموديلات</small></a>
   <a class="stat-card device-stat" href="?model_type=monitor"><span class="stat-label">الشاشات</span><strong>{{ monitor_count }}</strong><small>اضغط لعرض الموديلات</small></a>
   <a class="stat-card device-stat" href="?model_type=printer"><span class="stat-label">الطابعات</span><strong>{{ printer_count }}</strong><small>اضغط لعرض الموديلات</small></a>
-</div>
-
-<div class="smart-dashboard-strip">
-  <div class="section-heading"><div><h2>متابعة الفحص الدوري</h2><p>مؤشرات محسوبة من سجلات الزيارات والفحوص المكتملة، وليست من عدد الزيارات فقط.</p></div><a class="button" href="{% url 'site_visit_list' %}">سجل زيارات المشاريع ←</a></div>
-  <div class="stats-grid dashboard-status-grid smart-stat-grid">
-    <div class="stat-card"><span class="stat-label">زيارات مسجلة</span><strong>{{ smart_visit_count }}</strong></div>
-    <div class="stat-card"><span class="stat-label">زيارات مكتملة</span><strong>{{ smart_completed_visit_count }}</strong></div>
-    <div class="stat-card"><span class="stat-label">زيارات مفتوحة</span><strong>{{ smart_open_visit_count }}</strong></div>
-    <div class="stat-card"><span class="stat-label">أجهزة لها فحص مكتمل</span><strong>{{ smart_ever_inspected_count }}</strong></div>
-    <div class="stat-card"><span class="stat-label">لم تُفحص إطلاقًا</span><strong>{{ smart_never_inspected_count }}</strong></div>
-    <div class="stat-card"><span class="stat-label">فُحصت أكثر من مرة</span><strong>{{ smart_repeat_inspected_count }}</strong></div>
-    <div class="stat-card"><span class="stat-label">تحتاج إلى متابعة</span><strong>{{ smart_needs_attention_count }}</strong></div>
-  </div>
-  <div class="section-heading smart-project-title"><div><h2>Smart Dashboard حسب المشروع</h2><p>اضغط على أي مشروع لعرض تفاصيله ونسب الفحص وزياراته.</p></div></div>
-  <div class="table-wrap"><table><thead><tr><th>المشروع</th><th>إجمالي الأجهزة</th><th>لها فحص مكتمل</th><th>لم تُفحص</th><th>التغطية التاريخية</th><th>آخر زيارة</th><th></th></tr></thead><tbody>
-    {% for row in smart_project_rows %}<tr><td>{{ row.project }}</td><td>{{ row.total }}</td><td>{{ row.ever_inspected }}</td><td>{{ row.never_inspected }}</td><td><div class="smart-coverage-cell"><strong>{{ row.coverage_percent }}%</strong><div class="bar-track"><i style="width:{{ row.coverage_percent }}%"></i></div></div></td><td>{% if row.latest_visit_date %}{{ row.latest_visit_date|date:'d/m/Y' }}{% else %}—{% endif %}</td><td><a class="table-link" href="{% url 'project_inspection_dashboard' %}?project={{ row.project|urlencode }}">فتح المشروع</a></td></tr>{% empty %}<tr><td colspan="7" class="empty-cell">لا توجد مشروعات لها أصول مادية بعد.</td></tr>{% endfor %}
-  </tbody></table></div>
-  <div class="section-heading smart-project-title"><div><h2>أحدث الزيارات</h2></div></div>
-  <div class="table-wrap"><table><thead><tr><th>المشروع</th><th>التاريخ</th><th>الفني</th><th>تم فحصها</th><th>الحالة</th><th></th></tr></thead><tbody>
-    {% for visit in smart_recent_visits %}<tr><td>{{ visit.project }}</td><td>{{ visit.visit_date|date:'d/m/Y' }}</td><td>{{ visit.technician_name }}</td><td>{{ visit.inspected_total }}/{{ visit.inspection_total }}</td><td>{{ visit.get_status_display }}</td><td><a class="table-link" href="{% url 'site_visit_detail' visit.pk %}">فتح</a></td></tr>{% empty %}<tr><td colspan="6" class="empty-cell">لا توجد زيارات مسجلة.</td></tr>{% endfor %}
-  </tbody></table></div>
 </div>
 
 <div class="card dashboard-models-card">
