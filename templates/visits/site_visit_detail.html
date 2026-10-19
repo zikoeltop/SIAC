@@ -4,6 +4,27 @@
   <div class="hero-actions"><a class="button" href="{% url 'project_inspection_dashboard' %}?project={{ visit.project|urlencode }}">Dashboard المشروع</a><a class="button ghost" href="{% url 'site_visit_export' visit.pk %}">تصدير Excel ↓</a></div>
 </section>
 
+{% if can_manage_visit %}
+<div class="card">
+  <div class="section-heading"><div><h2>إدارة الزيارة</h2><p>التعديل أو الإلغاء أو الحذف متاح لمسؤول النظام ومنشئ الزيارة فقط.</p></div></div>
+  {% if visit.status != 'cancelled' %}
+  <form method="post" class="filter-form" style="align-items:end; flex-wrap:wrap;">
+    {% csrf_token %}<input type="hidden" name="action" value="edit_visit">
+    <div class="field"><label for="edit-project">المشروع</label><select id="edit-project" name="project" required>{% for project_name in project_names %}<option value="{{ project_name }}" {% if project_name|lower == visit.project|lower %}selected{% endif %}>{{ project_name }}</option>{% endfor %}</select></div>
+    <div class="field"><label for="edit-visit-date">تاريخ الزيارة</label><input id="edit-visit-date" type="date" name="visit_date" value="{{ visit.visit_date|date:'Y-m-d' }}" required></div>
+    <div class="field"><label for="edit-technician">اسم فني IT</label><input id="edit-technician" name="technician_name" value="{{ visit.technician_name }}" maxlength="255" required></div>
+    <div class="field" style="min-width:220px; flex:1;"><label for="edit-notes">ملاحظات الزيارة</label><input id="edit-notes" name="notes" value="{{ visit.notes }}"></div>
+    <button class="button" type="submit">حفظ تعديلات الزيارة</button>
+  </form>
+  {% endif %}
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
+    {% if visit.status != 'cancelled' %}<form method="post" onsubmit="return confirm('هل تريد إلغاء تسجيل الزيارة؟ ستظل محفوظة في السجل.');">{% csrf_token %}<input type="hidden" name="action" value="cancel_visit"><button class="button ghost" type="submit">إلغاء تسجيل الزيارة</button></form>{% endif %}
+    <form method="post" onsubmit="return confirm('تأكيد حذف الزيارة نهائيًا؟ سيتم حذف قائمة الفحص التابعة لها.');">{% csrf_token %}<input type="hidden" name="action" value="delete_visit"><button class="button" style="background:#a32121;" type="submit">حذف الزيارة نهائيًا</button></form>
+  </div>
+</div>
+{% endif %}
+{% if visit.status == 'cancelled' %}<div class="msg error">تم إلغاء تسجيل هذه الزيارة. السجل محفوظ للرجوع إليه ولا يمكن تعديل الفحص.</div>{% endif %}
+
 {% if form_error %}<div class="msg error">{{ form_error }}</div>{% endif %}
 <div class="stats-grid dashboard-status-grid">
   <div class="stat-card"><span class="stat-label">الأجهزة في القائمة</span><strong>{{ inspection_count }}</strong></div>
@@ -12,7 +33,7 @@
   <div class="stat-card"><span class="stat-label">تعذر فحصها</span><strong>{{ unable_count }}</strong></div>
 </div>
 
-{% if visit.status != 'completed' %}
+{% if visit.status == 'in_progress' %}
 <div class="card">
   <div class="section-heading"><div><h2>إضافة جهاز من كل سجلات SIAC</h2><p>ابحث بالسيريال نمبر أو اسم الكمبيوتر أو الموديل. الأجهزة غير المسجلة على المشروع تظهر كأجهزة إضافية دون تعديل مشروعها في SIAC.</p></div></div>
   <form method="get" class="filter-form">
@@ -53,7 +74,7 @@
       </select><span class="subline">{% if row.inspected_at %}آخر تسجيل: {{ row.inspected_at|date:'d/m/Y H:i' }}{% endif %}</span></td>
       <td class="comments-cell"><textarea class="inspection-comments" form="inspection-{{ row.pk }}" name="comments" rows="3" maxlength="10000" placeholder="ملاحظات الفني أو سبب تعذر الفحص">{% if posted_row_id == row.pk %}{{ posted_row_data.comments }}{% else %}{{ row.comments }}{% endif %}</textarea>
         {% if row.auto_comments %}<details class="auto-comments"><summary>ملاحظات التعديلات التلقائية</summary><pre>{{ row.auto_comments }}</pre></details>{% endif %}
-        {% if visit.status != 'completed' %}<button form="inspection-{{ row.pk }}" class="button small" type="submit">حفظ الفحص</button>{% endif %}
+        {% if visit.status == 'in_progress' %}<button form="inspection-{{ row.pk }}" class="button small" type="submit">حفظ الفحص</button>{% endif %}
       </td>
     </tr>
   {% empty %}<tr><td colspan="12" class="empty-cell">لا توجد أجهزة في قائمة الفحص. أضف جهازًا من البحث أو تحقق من اسم المشروع في بيانات SIAC.</td></tr>{% endfor %}
@@ -63,6 +84,6 @@
 <div class="card visit-finish-card">
   <div class="section-heading"><div><h2>اعتماد الزيارة</h2><p>تُغلق الزيارة بعد تسجيل نتيجة لكل جهاز في القائمة. «تعذر الفحص» يحتاج إلى سبب في COMMENTS، ولا يُحسب كفحص مكتمل.</p></div></div>
   {% if visit.status == 'completed' %}<div class="msg success">هذه الزيارة مكتملة ومقفولة{% if visit.completed_at %} بتاريخ {{ visit.completed_at|date:'d/m/Y H:i' }}{% endif %}. للتوثيق الجديد، أنشئ زيارة أخرى.</div>
-  {% else %}<form method="post" class="finish-visit-form">{% csrf_token %}<input type="hidden" name="action" value="complete_visit"><button class="button" type="submit">اعتماد وإغلاق الزيارة</button>{% if pending_count %}<span class="form-hint">متبقي {{ pending_count }} جهاز لم تُسجّل له نتيجة؛ لن يتم الإغلاق قبل إكمالها.</span>{% else %}<span class="form-hint">كل الأجهزة لها نتيجة، ويمكن إغلاق الزيارة.</span>{% endif %}</form>{% endif %}
+  {% elif visit.status == 'in_progress' %}<form method="post" class="finish-visit-form">{% csrf_token %}<input type="hidden" name="action" value="complete_visit"><button class="button" type="submit">اعتماد وإغلاق الزيارة</button>{% if pending_count %}<span class="form-hint">متبقي {{ pending_count }} جهاز لم تُسجّل له نتيجة؛ لن يتم الإغلاق قبل إكمالها.</span>{% else %}<span class="form-hint">كل الأجهزة لها نتيجة، ويمكن إغلاق الزيارة.</span>{% endif %}</form>{% endif %}
 </div>
 {% endblock %}
