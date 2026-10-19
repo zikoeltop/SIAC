@@ -97,20 +97,25 @@ def _join_unique(values, max_length=255):
 
 
 def _peripheral_map(assets):
-    codes = {(asset.hr_code or '').strip().casefold() for asset in assets if (asset.hr_code or '').strip()}
-    if not codes:
+    # Peripheral devices must be matched to the computer by User Name,
+    # not HR Code. HR codes can be shared/missing/inconsistent across imports.
+    user_names = {
+        (asset.display_employee_name or '').strip().casefold()
+        for asset in assets
+        if (asset.display_employee_name or '').strip() and (asset.display_employee_name or '').strip() != '-'
+    }
+    if not user_names:
         return {}
     result = defaultdict(lambda: {'monitors': [], 'printers': []})
-    # Fetch physical asset rows once and case-fold HR codes in Python, so mixed-case codes match too.
-    related = Asset.objects.filter(asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]).exclude(
-        asset_status__in=EXCLUDED_STATUSES
-    ).exclude(hr_code='').select_related('employee').order_by('id')
+    related = Asset.objects.filter(
+        asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
+    ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
     for asset in related:
-        code = (asset.hr_code or '').strip().casefold()
-        if code not in codes:
+        user_name = (asset.display_employee_name or '').strip().casefold()
+        if not user_name or user_name not in user_names:
             continue
         key = 'monitors' if asset.asset_type == Asset.Types.MONITOR else 'printers'
-        result[code][key].append(asset)
+        result[user_name][key].append(asset)
     return result
 
 
@@ -121,7 +126,7 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     # user. Monitor/printer assets are also checklist rows in their own right,
     # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
     # duplicated into the peripheral columns on that same row.
-    matching = peripherals.get(code, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
+    matching = peripherals.get(user_name_key, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
 
