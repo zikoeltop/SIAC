@@ -14,6 +14,9 @@ class AuditLog(models.Model):
         ('LEGACY_DEVICE_CREATE','Legacy device create'),('LEGACY_DEVICE_EDIT','Legacy device edit'),('LEGACY_DEVICE_DELETE','Legacy device delete'),
         ('LEGACY_IMPORT_CREATE','Legacy import create'),('LEGACY_IMPORT_EDIT','Legacy import edit'),('LEGACY_IMPORT_DELETE','Legacy import delete'),
         ('PASSWORD_CHANGE','Password change'),('PASSWORD_RESET','Password reset'),
+        ('SITE_VISIT_CREATE','Site visit created'),('SITE_VISIT_COMPLETE','Site visit completed'),
+        ('SITE_VISIT_ASSET_ADD','Asset added to visit'),('SITE_INSPECTION_UPDATE','Site inspection updated'),
+        ('SITE_VISIT_EXPORT','Site visit exported'),
     ]
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=40, choices=ACTIONS)
