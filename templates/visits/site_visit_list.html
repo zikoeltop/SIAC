@@ -28,7 +28,7 @@
     <tr>
       <td><a class="table-link" href="{% url 'project_inspection_dashboard' %}?project={{ visit.project|urlencode }}">{{ visit.project }}</a></td>
       <td>{{ visit.visit_date|date:'d/m/Y' }}</td><td>{{ visit.technician_name }}</td>
-      <td><span class="status-pill {% if visit.status == 'completed' %}positive{% elif visit.status == 'cancelled' %}negative{% else %}warning{% endif %}">{{ visit.get_status_display }}</span></td>
+      <td><span class="status-pill {% if visit.status == 'completed' %}positive{% else %}warning{% endif %}">{{ visit.get_status_display }}</span></td>
       <td>{{ visit.inspection_total }}</td><td>{{ visit.inspected_total }}</td><td>{{ visit.pending_total }}</td><td>{{ visit.unable_total }}</td>
       <td><a class="table-link" href="{% url 'site_visit_detail' visit.pk %}">فتح الزيارة</a></td>
     </tr>
