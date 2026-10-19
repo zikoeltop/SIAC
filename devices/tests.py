@@ -147,25 +147,6 @@ class SiteVisitInspectionWorkflowTests(TestCase):
         )
         self.client.force_login(self.regular)
 
-    def test_peripherals_match_computer_by_user_name_not_hr_code(self):
-        computer = Asset.objects.create(
-            asset_type=Asset.Types.COMPUTER, asset_status=Asset.Status.ACTIVE,
-            source_sheet='manual', project='Project Alpha', serial_number='PC-USER-01',
-            employee_name='Shared User Name', hr_code='COMPUTER-HR',
-            item_type='Desktop PC', model='Test PC',
-        )
-        printer = Asset.objects.create(
-            asset_type=Asset.Types.PRINTER, asset_status=Asset.Status.ACTIVE,
-            source_sheet='manual', project='Project Alpha', serial_number='PRN-USER-01',
-            employee_name='Shared User Name', hr_code='PRINTER-HR',
-            model='HP LaserJet Test',
-        )
-        from .site_visits import _peripheral_map, _snapshot_defaults
-        peripherals = _peripheral_map([computer])
-        snapshot = _snapshot_defaults(computer, None, peripherals=peripherals)
-        self.assertEqual(snapshot['printer_model'], 'HP LaserJet Test')
-        self.assertEqual(snapshot['printer_serial'], 'PRN-USER-01')
-
     def test_create_visit_builds_checklist_for_all_project_hardware(self):
         response = self.client.post(reverse('site_visit_create'), {
             'project': 'Project Alpha', 'visit_date': '2026-10-18',
@@ -179,44 +160,6 @@ class SiteVisitInspectionWorkflowTests(TestCase):
             {self.computer.pk, self.monitor.pk, self.printer.pk},
         )
         self.assertEqual(visit.status, SiteVisit.Status.IN_PROGRESS)
-
-    def test_visit_creator_can_cancel_and_delete_visit(self):
-        visit = SiteVisit.objects.create(
-            project='Project Alpha', visit_date=date(2026, 10, 18),
-            technician_name='IT Tech One', created_by=self.regular,
-        )
-        url = reverse('site_visit_detail', args=[visit.pk])
-        response = self.client.post(url, {'action': 'cancel_visit'})
-        self.assertEqual(response.status_code, 302)
-        visit.refresh_from_db()
-        self.assertEqual(visit.status, SiteVisit.Status.CANCELLED)
-
-        response = self.client.post(url, {'action': 'delete_visit'})
-        self.assertEqual(response.status_code, 302)
-        self.assertFalse(SiteVisit.objects.filter(pk=visit.pk).exists())
-
-    def test_non_creator_non_admin_cannot_delete_visit(self):
-        visit = SiteVisit.objects.create(
-            project='Project Alpha', visit_date=date(2026, 10, 18),
-            technician_name='IT Tech One', created_by=self.admin,
-        )
-        response = self.client.post(reverse('site_visit_detail', args=[visit.pk]), {
-            'action': 'delete_visit',
-        })
-        self.assertEqual(response.status_code, 403)
-        self.assertTrue(SiteVisit.objects.filter(pk=visit.pk).exists())
-
-    def test_non_creator_non_admin_cannot_cancel_visit(self):
-        visit = SiteVisit.objects.create(
-            project='Project Alpha', visit_date=date(2026, 10, 18),
-            technician_name='IT Tech One', created_by=self.admin,
-        )
-        response = self.client.post(reverse('site_visit_detail', args=[visit.pk]), {
-            'action': 'cancel_visit',
-        })
-        self.assertEqual(response.status_code, 403)
-        visit.refresh_from_db()
-        self.assertNotEqual(visit.status, SiteVisit.Status.CANCELLED)
 
     def test_global_search_adds_other_project_asset_without_changing_asset(self):
         visit = SiteVisit.objects.create(

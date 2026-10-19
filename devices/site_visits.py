@@ -11,7 +11,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
-from django.http import HttpResponse, HttpResponseForbidden
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from openpyxl import Workbook
@@ -96,114 +96,39 @@ def _join_unique(values, max_length=255):
     return '; '.join(result)[:max_length]
 
 
-def _peripheral_fields(items, model_getter, serial_getter):
-    """Return model and serial columns from the same deduplicated asset rows.
-
-    Keeping the pair together prevents independently deduplicating model and
-    serial values from shifting their positions and associating the wrong SN.
-    """
-    pairs = []
-    seen = set()
-    for item in items:
-        model = str(model_getter(item) or '').strip()
-        serial = str(serial_getter(item) or '').strip()
-        key = (model.casefold(), serial.casefold())
-        if (model or serial) and key not in seen:
-            seen.add(key)
-            pairs.append((model, serial))
-    return (
-        '; '.join(model or '-' for model, _ in pairs)[:255],
-        '; '.join(serial or '-' for _, serial in pairs)[:255],
-    )
-
-
-def _match_key(value):
-    """Normalize workbook join keys without treating blank values as a match."""
-    return ' '.join(str(value or '').strip().casefold().split())
-
-
 def _peripheral_map(assets):
-    """Map monitors by Monitors 2!Siac ID and printers by Printers 2027!column C (User Name)."""
-    # The computer's SIAC/HR identifier may be stored in either hr_code or
-    # asset_tag depending on the source sheet. Build all nonblank aliases so
-    # the monitor's Monitors 2!Siac ID resolves to the same computer as custody search.
-    computer_codes = set()
-    for asset in assets:
-        if asset.asset_type != Asset.Types.COMPUTER:
+    codes = {(asset.hr_code or '').strip().casefold() for asset in assets if (asset.hr_code or '').strip()}
+    if not codes:
+        return {}
+    result = defaultdict(lambda: {'monitors': [], 'printers': []})
+    # Fetch physical asset rows once and case-fold HR codes in Python, so mixed-case codes match too.
+    related = Asset.objects.filter(asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]).exclude(
+        asset_status__in=EXCLUDED_STATUSES
+    ).exclude(hr_code='').select_related('employee').order_by('id')
+    for asset in related:
+        code = (asset.hr_code or '').strip().casefold()
+        if code not in codes:
             continue
-        for value in (asset.hr_code, asset.asset_tag,
-                      asset.employee.hr_code if asset.employee_id else ''):
-            key = _match_key(value)
-            if key:
-                computer_codes.add(key)
-    computer_names = set()
-    for asset in assets:
-        if asset.asset_type != Asset.Types.COMPUTER:
-            continue
-        for name in (asset.display_employee_name, asset.employee_name,
-                     asset.employee.name if asset.employee_id else ''):
-            key = _match_key(name)
-            if key:
-                computer_names.add(key)
-
-    result = {'monitors_by_siac_id': defaultdict(list), 'printers_by_user_name': defaultdict(list)}
-    if not computer_codes and not computer_names:
-        return result
-
-    related = Asset.objects.filter(
-        asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
-    ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
-
-    for peripheral in related:
-        if peripheral.asset_type == Asset.Types.MONITOR:
-            # Monitors 2 column A: Siac ID. The importer stores this value in asset_tag.
-            key = _match_key(peripheral.asset_tag)
-            if key and key in computer_codes:
-                result['monitors_by_siac_id'][key].append(peripheral)
-        elif peripheral.asset_type == Asset.Types.PRINTER:
-            # Printers 2027 column C is User Name. Never fall back to HR Code;
-            # blank continuation rows (often toner rows) must not join to a computer.
-            key = _match_key(peripheral.employee_name)
-            if key and key in computer_names:
-                result['printers_by_user_name'][key].append(peripheral)
+        key = 'monitors' if asset.asset_type == Asset.Types.MONITOR else 'printers'
+        result[code][key].append(asset)
     return result
 
 
 def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     peripherals = peripherals or {}
-    # Peripheral values are shown on computer rows only. The monitor source
-    # joins by Monitors 2!Siac ID, which can be represented in the imported
-    # computer row as hr_code, asset_tag, or the linked employee's hr_code.
-    # Resolve every nonblank alias here exactly as _peripheral_map indexed it.
-    monitors = []
-    printers = []
-    if asset.asset_type == Asset.Types.COMPUTER:
-        computer_codes = (asset.hr_code, asset.asset_tag,
-                          asset.employee.hr_code if asset.employee_id else '')
-        for code_value in computer_codes:
-            code = _match_key(code_value)
-            if code:
-                matches = peripherals.get('monitors_by_siac_id', {}).get(code, [])
-                if matches:
-                    monitors = matches
-                    break
-        names = (asset.display_employee_name, asset.employee_name,
-                 asset.employee.name if asset.employee_id else '')
-        for name in names:
-            key = _match_key(name)
-            if key:
-                printers = peripherals.get('printers_by_user_name', {}).get(key, [])
-                if printers:
-                    break
+    code = (asset.hr_code or '').strip().casefold()
+    # Monitor/printer columns describe peripherals assigned to the computer's
+    # user. Monitor/printer assets are also checklist rows in their own right,
+    # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
+    # duplicated into the peripheral columns on that same row.
+    matching = peripherals.get(code, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
+    monitors = matching.get('monitors', [])
+    printers = matching.get('printers', [])
 
-    # Source records are the same Asset rows used by the asset search. Build
-    # each model/serial pair together so duplicate models cannot shift serials.
-    monitor_models, monitor_serials = _peripheral_fields(
-        monitors, lambda item: item.brand or item.model, lambda item: item.serial_number
-    )
-    printer_models, printer_serials = _peripheral_fields(
-        printers, lambda item: item.model, lambda item: item.serial_number
-    )
+    monitor_models = _join_unique([(item.model or item.item_type) for item in monitors])
+    monitor_serials = _join_unique([item.serial_number for item in monitors])
+    printer_models = _join_unique([(item.model or item.item_type) for item in printers])
+    printer_serials = _join_unique([item.serial_number for item in printers])
     user_name = _asset_display_name(asset)
     return {
         'visit': visit,
@@ -215,7 +140,7 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
         'type_snapshot': _type_snapshot(asset),
         'model_snapshot': (asset.model or asset.item_type or asset.brand or '').strip()[:255],
         'serial_number_snapshot': (asset.serial_number or '').strip()[:180],
-        'computer_name_snapshot': (asset.computer_name_new or asset.computer_name or '').strip()[:255],
+        'computer_name_snapshot': (asset.computer_name or asset.computer_name_new or '').strip()[:255],
         'source_monitor_model': monitor_models,
         'monitor_model': monitor_models,
         'source_monitor_serial': monitor_serials,
@@ -229,7 +154,7 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
 
 def _seed_project_assets(visit):
     """Ensure every current physical asset in the project's scope has a checklist row."""
-    if visit.status in (SiteVisit.Status.COMPLETED, SiteVisit.Status.CANCELLED):
+    if visit.status == SiteVisit.Status.COMPLETED:
         return 0
     assets = list(_project_scoped_assets(visit.project).select_related('employee').order_by('id'))
     if not assets:
@@ -272,13 +197,13 @@ def site_visit_global_metrics():
     assets = list(_inspectable_assets().select_related('employee').only('id', 'project', 'employee__project'))
     asset_ids = [asset.id for asset in assets]
     successful_counts = dict(
-        SiteInspection.objects.filter(asset_id__in=asset_ids, status__in=SUCCESS_STATUSES).exclude(visit__status=SiteVisit.Status.CANCELLED)
+        SiteInspection.objects.filter(asset_id__in=asset_ids, status__in=SUCCESS_STATUSES)
         .values('asset_id').annotate(total=Count('id')).values_list('asset_id', 'total')
     ) if asset_ids else {}
     latest_result_by_asset = {}
     recent_results = SiteInspection.objects.filter(
         asset_id__in=asset_ids
-    ).exclude(visit__status=SiteVisit.Status.CANCELLED).exclude(status=SiteInspection.Status.PENDING).order_by('-visit__visit_date', '-inspected_at', '-id') if asset_ids else SiteInspection.objects.none()
+    ).exclude(status=SiteInspection.Status.PENDING).order_by('-visit__visit_date', '-inspected_at', '-id') if asset_ids else SiteInspection.objects.none()
     for inspection in recent_results.only('asset_id', 'status'):
         latest_result_by_asset.setdefault(inspection.asset_id, inspection.status)
     ever_ids = set(successful_counts)
@@ -289,7 +214,7 @@ def site_visit_global_metrics():
             grouped_projects.setdefault(project.casefold(), {'name': project, 'asset_ids': []})['asset_ids'].append(asset.id)
 
     latest_by_project = {}
-    visits = SiteVisit.objects.exclude(status=SiteVisit.Status.CANCELLED)
+    visits = SiteVisit.objects.all()
     for visit in visits.order_by('-visit_date', '-created_at').only('project', 'visit_date'):
         latest_by_project.setdefault(visit.project.casefold(), visit.visit_date)
 
@@ -299,7 +224,7 @@ def site_visit_global_metrics():
     project_inspected_assets = defaultdict(set)
     project_results = SiteInspection.objects.filter(
         status__in=SUCCESS_STATUSES, is_additional=False
-    ).exclude(visit__status=SiteVisit.Status.CANCELLED).values('visit__project', 'asset_id').annotate(total=Count('id'))
+    ).values('visit__project', 'asset_id').annotate(total=Count('id'))
     for item in project_results:
         key = (item['visit__project'] or '').strip().casefold()
         if key:
@@ -319,7 +244,7 @@ def site_visit_global_metrics():
         })
     project_rows.sort(key=lambda row: (row['coverage_percent'], -row['total'], row['project'].casefold()))
 
-    visit_queryset = _site_visit_aggregate(SiteVisit.objects.exclude(status=SiteVisit.Status.CANCELLED))
+    visit_queryset = _site_visit_aggregate(SiteVisit.objects.all())
     recent_visits = list(visit_queryset.select_related('created_by').order_by('-visit_date', '-created_at')[:8])
     return {
         'smart_asset_count': len(assets),
@@ -327,7 +252,7 @@ def site_visit_global_metrics():
         'smart_never_inspected_count': max(len(assets) - len(ever_ids), 0),
         'smart_repeat_inspected_count': sum(1 for count in successful_counts.values() if count > 1),
         'smart_needs_attention_count': sum(1 for status in latest_result_by_asset.values() if status == SiteInspection.Status.NEEDS_ATTENTION),
-        'smart_visit_count': SiteVisit.objects.exclude(status=SiteVisit.Status.CANCELLED).count(),
+        'smart_visit_count': SiteVisit.objects.count(),
         'smart_completed_visit_count': SiteVisit.objects.filter(status=SiteVisit.Status.COMPLETED).count(),
         'smart_open_visit_count': SiteVisit.objects.filter(status=SiteVisit.Status.IN_PROGRESS).count(),
         'smart_project_rows': project_rows[:15],
@@ -340,7 +265,7 @@ def _project_dashboard_context(project, visit_id=None, page_number=None, from_da
     _inspectable = _project_scoped_assets(project).select_related('employee').order_by('asset_type', 'serial_number', 'id')
     project_assets = list(_inspectable)
     asset_ids = [asset.pk for asset in project_assets]
-    project_visits = _site_visit_aggregate(SiteVisit.objects.filter(project__iexact=project).exclude(status=SiteVisit.Status.CANCELLED)).order_by('-visit_date', '-created_at')
+    project_visits = _site_visit_aggregate(SiteVisit.objects.filter(project__iexact=project)).order_by('-visit_date', '-created_at')
     selected_visit = None
     if visit_id:
         selected_visit = project_visits.filter(pk=visit_id).first()
@@ -367,13 +292,13 @@ def _project_dashboard_context(project, visit_id=None, page_number=None, from_da
         SiteInspection.objects.filter(
             asset_id__in=asset_ids, status__in=SUCCESS_STATUSES,
             visit__project__iexact=project, is_additional=False,
-        ).exclude(visit__status=SiteVisit.Status.CANCELLED).values('asset_id').annotate(total=Count('id')).values_list('asset_id', 'total')
+        ).values('asset_id').annotate(total=Count('id')).values_list('asset_id', 'total')
     ) if asset_ids else {}
     history_counts = never_counts
     period_queryset = SiteInspection.objects.filter(
         asset_id__in=asset_ids, status__in=SUCCESS_STATUSES,
         visit__project__iexact=project, is_additional=False,
-    ).exclude(visit__status=SiteVisit.Status.CANCELLED)
+    )
     if from_date:
         period_queryset = period_queryset.filter(visit__visit_date__gte=from_date)
     if to_date:
@@ -382,7 +307,7 @@ def _project_dashboard_context(project, visit_id=None, page_number=None, from_da
     history_rows = SiteInspection.objects.filter(
         asset_id__in=asset_ids, status__in=SUCCESS_STATUSES,
         visit__project__iexact=project, is_additional=False,
-    ).exclude(visit__status=SiteVisit.Status.CANCELLED).select_related('visit').order_by('-visit__visit_date', '-inspected_at', '-id')
+    ).select_related('visit').order_by('-visit__visit_date', '-inspected_at', '-id')
     last_dates = {}
     for row in history_rows:
         last_dates.setdefault(row.asset_id, row.visit.visit_date)
@@ -551,39 +476,13 @@ def site_visit_create(request):
 @login_required
 def site_visit_detail(request, pk):
     visit = get_object_or_404(SiteVisit.objects.select_related('created_by'), pk=pk)
-    if visit.status not in (SiteVisit.Status.COMPLETED, SiteVisit.Status.CANCELLED):
+    if visit.status != SiteVisit.Status.COMPLETED:
         _seed_project_assets(visit)
 
     if request.method == 'POST':
         action = (request.POST.get('action') or '').strip()
-        is_admin = bool(getattr(request.user, 'is_admin_role', False))
-        is_creator = visit.created_by_id == request.user.id
-
-        # Cancellation is a soft status change, available to the visit creator or Admin.
-        if action == 'cancel_visit':
-            if not (is_admin or is_creator):
-                return HttpResponseForbidden('إلغاء الزيارة متاح لمنشئ الزيارة أو الـ Admin فقط.')
-            if visit.status == SiteVisit.Status.CANCELLED:
-                messages.info(request, 'الزيارة ملغاة بالفعل.')
-            else:
-                visit.status = SiteVisit.Status.CANCELLED
-                visit.save(update_fields=['status'])
-                log_event(request.user, 'SITE_VISIT_CANCEL', request, f'Cancelled site visit id={visit.pk}, project={visit.project}')
-                messages.success(request, 'تم إلغاء تسجيل الزيارة مع الاحتفاظ بسجل الفحص.')
-            return redirect('site_visit_detail', pk=visit.pk)
-
-        # Permanent deletion is available only to the visit creator or Admin; POST/CSRF required.
-        if action == 'delete_visit':
-            if not (is_admin or is_creator):
-                return HttpResponseForbidden('حذف سجل الزيارة متاح لمنشئ الزيارة أو الـ Admin فقط.')
-            visit_id, project = visit.pk, visit.project
-            log_event(request.user, 'SITE_VISIT_DELETE', request, f'Deleted site visit id={visit_id}, project={project}')
-            visit.delete()
-            messages.success(request, 'تم حذف سجل الزيارة نهائيًا.')
-            return redirect('site_visit_list')
-
-        if visit.status in (SiteVisit.Status.COMPLETED, SiteVisit.Status.CANCELLED):
-            messages.error(request, 'الزيارة مكتملة أو ملغاة ولا يمكن تعديلها.')
+        if visit.status == SiteVisit.Status.COMPLETED:
+            messages.error(request, 'الزيارة مكتملة ومقفولة. لا يمكن تغيير سجلها؛ أنشئ زيارة جديدة للتوثيق الجديد.')
             return redirect('site_visit_detail', pk=visit.pk)
 
         if action == 'add_asset':
@@ -696,13 +595,7 @@ def site_visit_detail(request, pk):
         messages.error(request, 'الإجراء المطلوب غير معروف.')
         return redirect('site_visit_detail', pk=visit.pk)
 
-    context = _visit_detail_context(request, visit)
-    context.update({
-        'is_admin': bool(getattr(request.user, 'is_admin_role', False)),
-        'can_cancel_visit': bool(getattr(request.user, 'is_admin_role', False) or visit.created_by_id == request.user.id),
-        'can_delete_visit': bool(getattr(request.user, 'is_admin_role', False) or visit.created_by_id == request.user.id),
-    })
-    return render(request, 'visits/site_visit_detail.html', context)
+    return render(request, 'visits/site_visit_detail.html', _visit_detail_context(request, visit))
 
 
 @login_required
