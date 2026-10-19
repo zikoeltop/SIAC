@@ -96,6 +96,27 @@ def _join_unique(values, max_length=255):
     return '; '.join(result)[:max_length]
 
 
+def _peripheral_fields(items, model_getter, serial_getter):
+    """Return model and serial columns from the same deduplicated asset rows.
+
+    Keeping the pair together prevents independently deduplicating model and
+    serial values from shifting their positions and associating the wrong SN.
+    """
+    pairs = []
+    seen = set()
+    for item in items:
+        model = str(model_getter(item) or '').strip()
+        serial = str(serial_getter(item) or '').strip()
+        key = (model.casefold(), serial.casefold())
+        if (model or serial) and key not in seen:
+            seen.add(key)
+            pairs.append((model, serial))
+    return (
+        '; '.join(model or '-' for model, _ in pairs)[:255],
+        '; '.join(serial or '-' for _, serial in pairs)[:255],
+    )
+
+
 def _match_key(value):
     """Normalize workbook join keys without treating blank values as a match."""
     return ' '.join(str(value or '').strip().casefold().split())
@@ -158,12 +179,14 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
                 if printers:
                     break
 
-    # Workbook fields: monitor model uses Brand (fallback Model), monitor serial
-    # uses Serial; printer model uses Model and printer serial uses Serial Number.
-    monitor_models = _join_unique([item.brand or item.model for item in monitors])
-    monitor_serials = _join_unique([item.serial_number for item in monitors])
-    printer_models = _join_unique([item.model for item in printers])
-    printer_serials = _join_unique([item.serial_number for item in printers])
+    # Source records are the same Asset rows used by the asset search. Build
+    # each model/serial pair together so duplicate models cannot shift serials.
+    monitor_models, monitor_serials = _peripheral_fields(
+        monitors, lambda item: item.brand or item.model, lambda item: item.serial_number
+    )
+    printer_models, printer_serials = _peripheral_fields(
+        printers, lambda item: item.model, lambda item: item.serial_number
+    )
     user_name = _asset_display_name(asset)
     return {
         'visit': visit,
