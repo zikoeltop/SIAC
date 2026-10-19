@@ -11,7 +11,7 @@ from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from openpyxl import Workbook
@@ -96,39 +96,95 @@ def _join_unique(values, max_length=255):
     return '; '.join(result)[:max_length]
 
 
+def _normalized_match(value):
+    """Normalize source workbook values for case/spacing-insensitive matching."""
+    return ' '.join(str(value or '').strip().casefold().split())
+
+
+def _source_row_values(asset, max_columns):
+    """Return imported workbook values in their original column order (A..K/A..I)."""
+    raw = asset.raw_data if isinstance(asset.raw_data, dict) else {}
+    return list(raw.values())[:max_columns]
+
+
 def _peripheral_map(assets):
-    codes = {(asset.hr_code or '').strip().casefold() for asset in assets if (asset.hr_code or '').strip()}
-    if not codes:
-        return {}
+    """Match peripherals to computers using all requested source-sheet columns.
+
+    Monitors 2 is searched across A:K and Printers 2027 across A:I. Matching is
+    limited to identifiers/names present on the computer custody record, and
+    model/serial values remain paired from each individual peripheral row.
+    """
+    computers = [asset for asset in assets if asset.asset_type == Asset.Types.COMPUTER]
     result = defaultdict(lambda: {'monitors': [], 'printers': []})
-    # Fetch physical asset rows once and case-fold HR codes in Python, so mixed-case codes match too.
-    related = Asset.objects.filter(asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]).exclude(
-        asset_status__in=EXCLUDED_STATUSES
-    ).exclude(hr_code='').select_related('employee').order_by('id')
-    for asset in related:
-        code = (asset.hr_code or '').strip().casefold()
-        if code not in codes:
+    if not computers:
+        return result
+
+    # Each computer can be identified by its HR/asset code or assigned user's name.
+    aliases_by_computer = {}
+    all_aliases = set()
+    for computer in computers:
+        aliases = set()
+        for value in (
+            computer.hr_code, computer.asset_tag,
+            computer.employee.hr_code if computer.employee_id else '',
+            computer.display_employee_name, computer.employee_name,
+            computer.employee.name if computer.employee_id else '',
+        ):
+            key = _normalized_match(value)
+            if key:
+                aliases.add(key)
+        aliases_by_computer[computer.pk] = aliases
+        all_aliases.update(aliases)
+
+    related = Asset.objects.filter(
+        asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
+    ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
+
+    for peripheral in related:
+        max_columns = 11 if peripheral.asset_type == Asset.Types.MONITOR else 9
+        source_values = _source_row_values(peripheral, max_columns)
+        # Include normalized model fields as a fallback for older imports that
+        # did not retain raw workbook column names/order.
+        source_values.extend([
+            peripheral.hr_code, peripheral.asset_tag, peripheral.employee_name,
+            peripheral.employee.name if peripheral.employee_id else '',
+        ])
+        row_values = {_normalized_match(value) for value in source_values if _normalized_match(value)}
+        matches = row_values.intersection(all_aliases)
+        if not matches:
             continue
-        key = 'monitors' if asset.asset_type == Asset.Types.MONITOR else 'printers'
-        result[code][key].append(asset)
+        key_name = 'monitors' if peripheral.asset_type == Asset.Types.MONITOR else 'printers'
+        for computer in computers:
+            if aliases_by_computer[computer.pk].intersection(matches):
+                result[_normalized_match(computer.hr_code)][key_name].append(peripheral)
     return result
 
 
 def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     peripherals = peripherals or {}
-    code = (asset.hr_code or '').strip().casefold()
-    # Monitor/printer columns describe peripherals assigned to the computer's
-    # user. Monitor/printer assets are also checklist rows in their own right,
-    # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
-    # duplicated into the peripheral columns on that same row.
+    code = _normalized_match(asset.hr_code)
+    # Peripheral fields are populated only on computer rows. Match through the
+    # aliases assembled from the source rows; never write changes back to Asset.
     matching = peripherals.get(code, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
 
-    monitor_models = _join_unique([(item.model or item.item_type) for item in monitors])
-    monitor_serials = _join_unique([item.serial_number for item in monitors])
-    printer_models = _join_unique([(item.model or item.item_type) for item in printers])
-    printer_serials = _join_unique([item.serial_number for item in printers])
+    def paired_values(items, model_getter):
+        pairs, seen = [], set()
+        for item in items:
+            model = str(model_getter(item) or '').strip()
+            serial = str(item.serial_number or '').strip()
+            pair = (model.casefold(), serial.casefold())
+            if (model or serial) and pair not in seen:
+                seen.add(pair)
+                pairs.append((model or '-', serial or '-'))
+        return (
+            '; '.join(model for model, _ in pairs)[:255],
+            '; '.join(serial for _, serial in pairs)[:255],
+        )
+
+    monitor_models, monitor_serials = paired_values(monitors, lambda item: item.model or item.item_type or item.brand)
+    printer_models, printer_serials = paired_values(printers, lambda item: item.model or item.item_type or item.brand)
     user_name = _asset_display_name(asset)
     return {
         'visit': visit,
