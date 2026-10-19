@@ -96,7 +96,7 @@ def _join_unique(values, max_length=255):
     return '; '.join(result)[:max_length]
 
 
-def _normalized_match(value):
+def _normalized_key(value):
     """Normalize names/IDs from imported inventory columns for reliable matching."""
     return ' '.join(str(value or '').strip().casefold().split())
 
@@ -108,99 +108,87 @@ def _asset_person_keys(asset):
         getattr(employee, 'hr_code', '') if employee else '',
         getattr(asset, 'employee_name', ''),
         getattr(employee, 'name', '') if employee else '',
-        getattr(employee, 'arabic_name', '') if employee else '',
         getattr(asset, 'display_employee_name', ''),
     ]
-    return {_normalized_match(value) for value in values if _normalized_match(value) and _normalized_match(value) != '-'}
-
-
-def _source_identity_values(asset, max_columns):
-    """Read identity fields only, while limiting the scan to A:K or A:I."""
-    raw = asset.raw_data if isinstance(asset.raw_data, dict) else {}
-    identity_terms = (
-        'siac id', 'user name', 'username', 'hr id', 'hr code', 'employee',
-        'computer name', 'computer', 'asset number', 'asset tag', 'serial',
-        'user id', 'name',
-    )
-    values = []
-    for header, value in list(raw.items())[:max_columns]:
-        normalized_header = _normalized_match(header)
-        if any(term in normalized_header for term in identity_terms):
-            values.append(value)
-    return values
+    return {_normalized_key(value) for value in values if _normalized_key(value) and _normalized_key(value) != '-'}
 
 
 def _peripheral_map(assets):
-    """Match peripherals to computers using identifiers in the imported source rows.
+    """Match peripherals to computers by employee identity and the monitor Siac ID.
 
-    Monitors 2 is searched across A:K and Printers 2027 across A:I. Model/serial
-    values are later paired from each matched peripheral row, and Asset records
-    are never modified by visit inspection edits.
+    Imported Monitor/Printer sheets don't always populate HR Code consistently.
+    Monitor records can instead identify the computer by Siac ID (asset_tag),
+    while Printers 2027 identifies the assigned user in its User Name column.
+    Use all available normalized identifiers without changing source assets.
     """
     computers = [asset for asset in assets if asset.asset_type == Asset.Types.COMPUTER]
-    result = defaultdict(lambda: {'monitors': [], 'printers': []})
     if not computers:
-        return result
+        return {}
 
-    aliases_by_computer = {}
+    computer_keys = {}
+    lookup_keys = set()
     for computer in computers:
-        aliases = _asset_person_keys(computer)
+        keys = _asset_person_keys(computer)
         for value in (computer.serial_number, computer.asset_tag, computer.computer_name, computer.computer_name_new):
-            key = _normalized_match(value)
-            if key and key != '-':
-                aliases.add(key)
-        aliases_by_computer[computer.pk] = aliases
+            normalized = _normalized_key(value)
+            if normalized and normalized != '-':
+                keys.add(normalized)
+        computer_keys[computer.pk] = keys
+        lookup_keys.update(keys)
 
+    result = defaultdict(lambda: {'monitors': [], 'printers': []})
     related = Asset.objects.filter(
         asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]
     ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
 
     for peripheral in related:
-        max_columns = 11 if peripheral.asset_type == Asset.Types.MONITOR else 9
-        source_values = _source_identity_values(peripheral, max_columns)
-        source_values.extend([
-            peripheral.hr_code, peripheral.asset_tag, peripheral.employee_name,
-            peripheral.employee.hr_code if peripheral.employee_id else '',
-            peripheral.employee.name if peripheral.employee_id else '',
-            peripheral.employee.arabic_name if peripheral.employee_id else '',
-        ])
-        row_values = {_normalized_match(value) for value in source_values if _normalized_match(value) and _normalized_match(value) != '-'}
-        bucket = 'monitors' if peripheral.asset_type == Asset.Types.MONITOR else 'printers'
+        keys = _asset_person_keys(peripheral)
+        # Monitors 2 column A is Siac ID; in the normalized Asset schema this
+        # is commonly asset_tag. It may refer to a computer serial/name/tag.
+        if peripheral.asset_type == Asset.Types.MONITOR:
+            tag = _normalized_key(peripheral.asset_tag)
+            if tag:
+                keys.add(tag)
+        matching_computers = []
         for computer in computers:
-            if aliases_by_computer[computer.pk].intersection(row_values):
-                key = _normalized_match(computer.hr_code) or f'asset:{computer.pk}'
-                result[key][bucket].append(peripheral)
+            if computer_keys[computer.pk] & keys:
+                matching_computers.append(computer)
+        if not matching_computers:
+            continue
+        bucket = 'monitors' if peripheral.asset_type == Asset.Types.MONITOR else 'printers'
+        for computer in matching_computers:
+            result[computer.hr_code.strip().casefold() or f'asset:{computer.pk}'][bucket].append(peripheral)
     return result
-
-
-def _paired_values(items, model_getter):
-    """Return model and serial lists from the same deduplicated source rows."""
-    pairs, seen = [], set()
-    for item in items:
-        model = str(model_getter(item) or '').strip()
-        serial = str(item.serial_number or '').strip()
-        pair = (model.casefold(), serial.casefold())
-        if (model or serial) and pair not in seen:
-            seen.add(pair)
-            pairs.append((model or '-', serial or '-'))
-    return (
-        '; '.join(model for model, _ in pairs)[:255],
-        '; '.join(serial for _, serial in pairs)[:255],
-    )
 
 
 def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     peripherals = peripherals or {}
-    code = _normalized_match(asset.hr_code)
-    # Peripheral fields are populated only on computer rows. Keep all changes in
-    # inspection snapshots; never write edited values back to the source Asset.
+    code = (asset.hr_code or '').strip().casefold()
+    # Monitor/printer columns describe peripherals assigned to the computer's
+    # user. Monitor/printer assets are also checklist rows in their own right,
+    # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
+    # duplicated into the peripheral columns on that same row.
     matching_key = code or f'asset:{asset.pk}'
     matching = peripherals.get(matching_key, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
 
-    monitor_models, monitor_serials = _paired_values(monitors, lambda item: item.model or item.item_type or item.brand)
-    printer_models, printer_serials = _paired_values(printers, lambda item: item.model or item.item_type or item.brand)
+    def paired_values(items, model_getter):
+        pairs, seen = [], set()
+        for item in items:
+            model = str(model_getter(item) or '').strip()
+            serial = str(item.serial_number or '').strip()
+            pair = (model.casefold(), serial.casefold())
+            if (model or serial) and pair not in seen:
+                seen.add(pair)
+                pairs.append((model or '-', serial or '-'))
+        return (
+            '; '.join(model for model, _ in pairs)[:255],
+            '; '.join(serial for _, serial in pairs)[:255],
+        )
+
+    monitor_models, monitor_serials = paired_values(monitors, lambda item: item.model or item.item_type or item.brand)
+    printer_models, printer_serials = paired_values(printers, lambda item: item.model or item.item_type or item.brand)
     user_name = _asset_display_name(asset)
     return {
         'visit': visit,
@@ -237,13 +225,13 @@ def _refresh_peripheral_snapshots(visit):
         ('printer_serial', 'source_printer_serial'),
     )
     for row in computer_rows:
-        key = _normalized_match(row.asset.hr_code) or f'asset:{row.asset_id}'
+        key = (row.asset.hr_code or '').strip().casefold() or f'asset:{row.asset_id}'
         matched = peripherals.get(key, {'monitors': [], 'printers': []})
         defaults = {
-            'source_monitor_model': _paired_values(matched['monitors'], lambda item: item.model or item.item_type or item.brand)[0],
-            'source_monitor_serial': _paired_values(matched['monitors'], lambda item: item.model or item.item_type or item.brand)[1],
-            'source_printer_model': _paired_values(matched['printers'], lambda item: item.model or item.item_type or item.brand)[0],
-            'source_printer_serial': _paired_values(matched['printers'], lambda item: item.model or item.item_type or item.brand)[1],
+            'source_monitor_model': _join_unique([item.model or item.item_type for item in matched['monitors']]),
+            'source_monitor_serial': _join_unique([item.serial_number for item in matched['monitors']]),
+            'source_printer_model': _join_unique([item.model or item.item_type for item in matched['printers']]),
+            'source_printer_serial': _join_unique([item.serial_number for item in matched['printers']]),
         }
         changed_fields = []
         for current_field, source_field in fields:
