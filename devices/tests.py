@@ -147,6 +147,25 @@ class SiteVisitInspectionWorkflowTests(TestCase):
         )
         self.client.force_login(self.regular)
 
+    def test_peripherals_match_computer_by_user_name_not_hr_code(self):
+        computer = Asset.objects.create(
+            asset_type=Asset.Types.COMPUTER, asset_status=Asset.Status.ACTIVE,
+            source_sheet='manual', project='Project Alpha', serial_number='PC-USER-01',
+            employee_name='Shared User Name', hr_code='COMPUTER-HR',
+            item_type='Desktop PC', model='Test PC',
+        )
+        printer = Asset.objects.create(
+            asset_type=Asset.Types.PRINTER, asset_status=Asset.Status.ACTIVE,
+            source_sheet='manual', project='Project Alpha', serial_number='PRN-USER-01',
+            employee_name='Shared User Name', hr_code='PRINTER-HR',
+            model='HP LaserJet Test',
+        )
+        from .site_visits import _peripheral_map, _snapshot_defaults
+        peripherals = _peripheral_map([computer])
+        snapshot = _snapshot_defaults(computer, None, peripherals=peripherals)
+        self.assertEqual(snapshot['printer_model'], 'HP LaserJet Test')
+        self.assertEqual(snapshot['printer_serial'], 'PRN-USER-01')
+
     def test_create_visit_builds_checklist_for_all_project_hardware(self):
         response = self.client.post(reverse('site_visit_create'), {
             'project': 'Project Alpha', 'visit_date': '2026-10-18',
