@@ -323,6 +323,8 @@ class SiteInspection(models.Model):
     printer_model = models.CharField(max_length=255, blank=True)
     source_printer_serial = models.CharField(max_length=255, blank=True)
     printer_serial = models.CharField(max_length=255, blank=True)
+    # Retained for compatibility with migration history and existing databases.
+    peripherals_snapshot = models.JSONField(default=list, blank=True)
 
     status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING, db_index=True)
     comments = models.TextField(blank=True, verbose_name='Technician Comments')

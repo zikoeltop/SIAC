@@ -5,6 +5,8 @@ All values recorded here are visit snapshots. Editing an inspection never writes
 from collections import defaultdict
 from datetime import date
 from io import BytesIO
+import logging
+import traceback
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -20,12 +22,25 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from audit.utils import log_event
 from .models import Asset, Employee, SiteInspection, SiteVisit
 
+logger = logging.getLogger(__name__)
+
+
+def _log_visit_exception(message):
+    """Emit the full exception to Railway logs for diagnosing visit failures."""
+    details = traceback.format_exc()
+    print(f"\n[SIAC SITE VISIT ERROR] {message}\n{details}", flush=True)
+    logger.error('%s\n%s', message, details)
+
 
 PHYSICAL_TYPES = [Asset.Types.COMPUTER, Asset.Types.MONITOR, Asset.Types.PRINTER, Asset.Types.OTHER]
 EXCLUDED_STATUSES = [Asset.Status.SCRAPPED, Asset.Status.ARCHIVED]
 SUCCESS_STATUSES = [SiteInspection.Status.INSPECTED, SiteInspection.Status.NEEDS_ATTENTION]
 EDITABLE_SNAPSHOT_FIELDS = {
     'user_name': ('USER NAME', 'سبب تغيير اسم المستخدم'),
+    'type_snapshot': ('TYPE', 'سبب تغيير النوع'),
+    'model_snapshot': ('MODEL', 'سبب تغيير الموديل'),
+    'serial_number_snapshot': ('SERIAL NUMBER', 'سبب تغيير السيريال'),
+    'computer_name_snapshot': ('COMPUTER NAME', 'سبب تغيير اسم الكمبيوتر'),
     'monitor_model': ('Monitor Model', 'سبب تغيير موديل الشاشة'),
     'monitor_serial': ('Monitor Serial', 'سبب تغيير سيريال الشاشة'),
     'printer_model': ('printer model', 'سبب تغيير موديل الطابعة'),
@@ -34,7 +49,7 @@ EDITABLE_SNAPSHOT_FIELDS = {
 EXCEL_HEADERS = [
     'Project', 'visit date', 'IT TECH NAME', 'USER NAME', 'TYPE', 'MODEL',
     'SERIAL NUMBER', 'COMPUTER NAME', 'Monitor Model', 'Monitor Serial',
-    'printer model', 'printer serial', 'COMMENTS',
+    'printer model', 'printer serial', 'نتيجة الفحص', 'COMMENTS',
 ]
 
 
@@ -59,6 +74,7 @@ def _asset_belongs_to_project(asset, project):
 def _project_names():
     """Unique normalized project labels based on assets, plus employee project references."""
     values = list(_inspectable_assets().exclude(project='').values_list('project', flat=True))
+    values += list(Asset.objects.filter(hr_code__iexact='Consaltant').exclude(project='').values_list('project', flat=True))
     values += list(Employee.objects.exclude(project='').values_list('project', flat=True))
     unique = {}
     for value in values:
@@ -97,73 +113,104 @@ def _join_unique(values, max_length=255):
 
 
 def _peripheral_map(assets):
-    codes = {(asset.hr_code or '').strip().casefold() for asset in assets if (asset.hr_code or '').strip()}
-    if not codes:
-        return {}
-    result = defaultdict(lambda: {'monitors': [], 'printers': []})
-    # Fetch physical asset rows once and case-fold HR codes in Python, so mixed-case codes match too.
+    """Index monitors/printers by employee identity first, then a real HR code.
+
+    The literal value 'Consaltant' is a category marker in the source workbook,
+    not a unique employee identifier, so it must never be used to join peripherals.
+    """
+    employee_ids = {a.employee_id for a in assets if a.employee_id}
+    codes = {(a.hr_code or '').strip().casefold() for a in assets
+             if (a.hr_code or '').strip() and (a.hr_code or '').strip().casefold() != 'consaltant'}
+    result = {'by_employee': defaultdict(lambda: {'monitors': [], 'printers': []}),
+              'by_code': defaultdict(lambda: {'monitors': [], 'printers': []})}
     related = Asset.objects.filter(asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER]).exclude(
         asset_status__in=EXCLUDED_STATUSES
-    ).exclude(hr_code='').select_related('employee').order_by('id')
-    for asset in related:
-        code = (asset.hr_code or '').strip().casefold()
-        if code not in codes:
-            continue
-        key = 'monitors' if asset.asset_type == Asset.Types.MONITOR else 'printers'
-        result[code][key].append(asset)
+    ).select_related('employee').order_by('id')
+    for peripheral in related:
+        kind = 'monitors' if peripheral.asset_type == Asset.Types.MONITOR else 'printers'
+        if peripheral.employee_id and peripheral.employee_id in employee_ids:
+            result['by_employee'][peripheral.employee_id][kind].append(peripheral)
+        code = (peripheral.hr_code or '').strip().casefold()
+        if code and code != 'consaltant' and code in codes:
+            result['by_code'][code][kind].append(peripheral)
     return result
 
 
 def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     peripherals = peripherals or {}
     code = (asset.hr_code or '').strip().casefold()
-    # Monitor/printer columns describe peripherals assigned to the computer's
-    # user. Monitor/printer assets are also checklist rows in their own right,
-    # but their own model/serial remain in MODEL/SERIAL NUMBER and are not
-    # duplicated into the peripheral columns on that same row.
-    matching = peripherals.get(code, {'monitors': [], 'printers': []}) if asset.asset_type == Asset.Types.COMPUTER else {'monitors': [], 'printers': []}
+    empty = {'monitors': [], 'printers': []}
+    matching = empty
+    if asset.asset_type == Asset.Types.COMPUTER:
+        by_employee = peripherals.get('by_employee', {}).get(asset.employee_id, empty) if asset.employee_id else empty
+        by_code = peripherals.get('by_code', {}).get(code, empty) if code and code != 'consaltant' else empty
+        matching = {
+            'monitors': by_employee.get('monitors') or by_code.get('monitors', []),
+            'printers': by_employee.get('printers') or by_code.get('printers', []),
+        }
     monitors = matching.get('monitors', [])
     printers = matching.get('printers', [])
-
-    monitor_models = _join_unique([(item.model or item.item_type) for item in monitors])
+    monitor_models = _join_unique([(item.model or item.brand or item.item_type) for item in monitors])
     monitor_serials = _join_unique([item.serial_number for item in monitors])
-    printer_models = _join_unique([(item.model or item.item_type) for item in printers])
+    printer_models = _join_unique([(item.model or item.brand or item.item_type) for item in printers])
     printer_serials = _join_unique([item.serial_number for item in printers])
     user_name = _asset_display_name(asset)
+    is_consultant = (asset.hr_code or '').strip().casefold() == 'consaltant'
     return {
-        'visit': visit,
-        'asset': asset,
-        'is_additional': is_additional,
+        'visit': visit, 'asset': asset, 'is_additional': is_additional,
         'source_project': (asset.project or '').strip() or ((asset.employee.project or '').strip() if asset.employee_id else ''),
-        'source_user_name': user_name,
-        'user_name': user_name,
-        'type_snapshot': _type_snapshot(asset),
+        'source_user_name': user_name, 'user_name': user_name,
+        'type_snapshot': 'Consaltant' if is_consultant else _type_snapshot(asset),
         'model_snapshot': (asset.model or asset.item_type or asset.brand or '').strip()[:255],
         'serial_number_snapshot': (asset.serial_number or '').strip()[:180],
         'computer_name_snapshot': (asset.computer_name or asset.computer_name_new or '').strip()[:255],
-        'source_monitor_model': monitor_models,
-        'monitor_model': monitor_models,
-        'source_monitor_serial': monitor_serials,
-        'monitor_serial': monitor_serials,
-        'source_printer_model': printer_models,
-        'printer_model': printer_models,
-        'source_printer_serial': printer_serials,
-        'printer_serial': printer_serials,
+        'source_monitor_model': monitor_models, 'monitor_model': monitor_models,
+        'source_monitor_serial': monitor_serials, 'monitor_serial': monitor_serials,
+        'source_printer_model': printer_models, 'printer_model': printer_models,
+        'source_printer_serial': printer_serials, 'printer_serial': printer_serials,
     }
 
+
+def _visible_inspection_rows(queryset):
+    """Hide a monitor/printer row when its peripheral is represented on a computer row.
+
+    Match by employee FK first. Fall back to HR Code only when it is a real code,
+    never the shared 'Consaltant' category marker.
+    """
+    rows = list(queryset.select_related('asset', 'asset__employee'))
+    computer_employee_ids = {r.asset.employee_id for r in rows
+                             if r.asset_id and r.asset.asset_type == Asset.Types.COMPUTER and r.asset.employee_id}
+    computer_codes = {(r.asset.hr_code or '').strip().casefold() for r in rows
+                      if r.asset_id and r.asset.asset_type == Asset.Types.COMPUTER
+                      and (r.asset.hr_code or '').strip()
+                      and (r.asset.hr_code or '').strip().casefold() != 'consaltant'}
+    return [r for r in rows if not (
+        r.asset_id and r.asset.asset_type in (Asset.Types.MONITOR, Asset.Types.PRINTER)
+        and ((r.asset.employee_id and r.asset.employee_id in computer_employee_ids)
+             or ((r.asset.hr_code or '').strip().casefold() in computer_codes
+                 and (r.asset.hr_code or '').strip().casefold() != 'consaltant'))
+    )]
 
 def _seed_project_assets(visit):
     """Ensure every current physical asset in the project's scope has a checklist row."""
     if visit.status == SiteVisit.Status.COMPLETED:
         return 0
     assets = list(_project_scoped_assets(visit.project).select_related('employee').order_by('id'))
+    # Consultants are represented in the source 'all' sheet by HR Code = Consaltant.
+    # Include only rows belonging to this project; these records remain editable even
+    # when their device fields are blank. Keep them distinct by their underlying Asset PK.
+    consultant_assets = list(Asset.objects.filter(hr_code__iexact='Consaltant').filter(
+        Q(project__iexact=visit.project) | (Q(project='') & Q(employee__project__iexact=visit.project))
+    ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id'))
+    known_ids = {asset.pk for asset in assets}
+    assets.extend(asset for asset in consultant_assets if asset.pk not in known_ids)
     if not assets:
         return 0
     existing = set(visit.inspections.values_list('asset_id', flat=True))
     missing = [asset for asset in assets if asset.pk not in existing]
     if not missing:
         return 0
-    peripherals = _peripheral_map(missing)
+    peripherals = _peripheral_map(assets)
     rows = [SiteInspection(**_snapshot_defaults(asset, visit, False, peripherals)) for asset in missing]
     SiteInspection.objects.bulk_create(rows, ignore_conflicts=True)
     return len(rows)
@@ -352,7 +399,7 @@ def _project_dashboard_context(project, visit_id=None, page_number=None, from_da
 
 
 def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=None, form_error=''):
-    inspections = visit.inspections.select_related('asset', 'inspected_by').order_by('type_snapshot', 'serial_number_snapshot', 'id')
+    inspections = _visible_inspection_rows(visit.inspections.select_related('inspected_by').order_by('type_snapshot', 'serial_number_snapshot', 'id'))
     q = (request.GET.get('q') or '').strip()
     search_page = None
     if q:
@@ -377,10 +424,10 @@ def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=No
         'form_error': form_error,
         'inspection_status_choices': SiteInspection.Status.choices,
         'project_names': _project_names(),
-        'inspection_count': inspections.count(),
-        'inspected_count': inspections.filter(status__in=SUCCESS_STATUSES).count(),
-        'pending_count': inspections.filter(status=SiteInspection.Status.PENDING).count(),
-        'unable_count': inspections.filter(status=SiteInspection.Status.UNABLE).count(),
+        'inspection_count': len(inspections),
+        'inspected_count': sum(1 for row in inspections if row.status in SUCCESS_STATUSES),
+        'pending_count': sum(1 for row in inspections if row.status == SiteInspection.Status.PENDING),
+        'unable_count': sum(1 for row in inspections if row.status == SiteInspection.Status.UNABLE),
     }
 
 
@@ -457,16 +504,33 @@ def site_visit_create(request):
             for error in errors:
                 messages.error(request, error)
         else:
-            with transaction.atomic():
-                visit = SiteVisit.objects.create(
-                    project=valid_project, visit_date=visit_date, technician_name=technician_name,
-                    notes=notes, status=SiteVisit.Status.IN_PROGRESS,
-                    created_by=request.user,
+            try:
+                with transaction.atomic():
+                    visit = SiteVisit.objects.create(
+                        project=valid_project, visit_date=visit_date, technician_name=technician_name,
+                        notes=notes, status=SiteVisit.Status.IN_PROGRESS,
+                        created_by=request.user,
+                    )
+                    seeded = _seed_project_assets(visit)
+            except Exception:
+                _log_visit_exception(
+                    f'Failed to create/seed site visit (project={valid_project!r}, '
+                    f'visit_date={visit_date!r}, user_id={getattr(request.user, "pk", None)!r})'
                 )
-                seeded = _seed_project_assets(visit)
-            log_event(request.user, 'SITE_VISIT_CREATE', request, f'Created site visit id={visit.pk}, project={visit.project}, date={visit.visit_date}, checklist_rows={seeded}')
-            messages.success(request, f'تم إنشاء الزيارة وتجهيز قائمة الفحص بعدد {seeded} جهازًا من المشروع.')
-            return redirect('site_visit_detail', pk=visit.pk)
+                messages.error(request, 'تعذر إنشاء الزيارة أو تجهيز الأجهزة. تم تسجيل تفاصيل الخطأ في سجلات السيرفر.')
+                initial_project = project
+            else:
+                # Audit logging must not turn a successfully-created visit into HTTP 500.
+                try:
+                    log_event(
+                        request.user, 'SITE_VISIT_CREATE', request,
+                        f'Created site visit id={visit.pk}, project={visit.project}, '
+                        f'date={visit.visit_date}, checklist_rows={seeded}',
+                    )
+                except Exception:
+                    _log_visit_exception(f'Visit {visit.pk} was created, but audit logging failed')
+                messages.success(request, f'تم إنشاء الزيارة وتجهيز قائمة الفحص بعدد {seeded} جهازًا من المشروع.')
+                return redirect('site_visit_detail', pk=visit.pk)
         initial_project = project
     return render(request, 'visits/site_visit_form.html', {
         'project_names': projects, 'initial_project': initial_project, 'posted_values': posted_values,
@@ -489,7 +553,11 @@ def _can_manage_visit(user, visit):
 def site_visit_detail(request, pk):
     visit = get_object_or_404(SiteVisit.objects.select_related('created_by'), pk=pk)
     if visit.status == SiteVisit.Status.IN_PROGRESS:
-        _seed_project_assets(visit)
+        try:
+            _seed_project_assets(visit)
+        except Exception:
+            _log_visit_exception(f'Failed to seed checklist while opening site visit id={visit.pk}')
+            messages.error(request, 'تعذر تجهيز قائمة الأجهزة. تم تسجيل تفاصيل الخطأ في سجلات السيرفر.')
 
     if request.method == 'POST':
         action = (request.POST.get('action') or '').strip()
@@ -581,8 +649,9 @@ def site_visit_detail(request, pk):
             error_list = []
             changed = {}
             for field, (label, reason_label) in EDITABLE_SNAPSHOT_FIELDS.items():
-                if len(values[field]) > 255:
-                    error_list.append(f'{label}: الحد الأقصى 255 حرفًا.')
+                field_limits = {'type_snapshot': 120, 'model_snapshot': 255, 'serial_number_snapshot': 180, 'computer_name_snapshot': 255}
+                if len(values[field]) > field_limits.get(field, 255):
+                    error_list.append(f'{label}: الحد الأقصى {field_limits.get(field, 255)} حرفًا.')
                 if values[field] != (getattr(inspection, field) or ''):
                     changed[field] = values[field]
                     if not reasons[field]:
@@ -661,7 +730,7 @@ def site_visit_detail(request, pk):
 @login_required
 def site_visit_export(request, pk):
     visit = get_object_or_404(SiteVisit, pk=pk)
-    inspections = visit.inspections.select_related('asset').order_by('type_snapshot', 'serial_number_snapshot', 'id')
+    inspections = _visible_inspection_rows(visit.inspections.select_related('asset').order_by('type_snapshot', 'serial_number_snapshot', 'id'))
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = 'Periodic Inspection'
@@ -680,6 +749,7 @@ def site_visit_export(request, pk):
             inspection.monitor_serial,
             inspection.printer_model,
             inspection.printer_serial,
+            inspection.get_status_display(),
             inspection.combined_comments,
         ])
     header_fill = PatternFill('solid', fgColor='17365D')
@@ -690,7 +760,7 @@ def site_visit_export(request, pk):
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(vertical='top', wrap_text=True)
-    widths = [26, 14, 24, 26, 16, 26, 24, 26, 26, 26, 26, 26, 55]
+    widths = [26, 14, 24, 26, 16, 26, 24, 26, 26, 26, 26, 26, 22, 55]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[sheet.cell(1, index).column_letter].width = width
     sheet.freeze_panes = 'A2'
@@ -699,7 +769,7 @@ def site_visit_export(request, pk):
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
-    log_event(request.user, 'SITE_VISIT_EXPORT', request, f'Exported inspection workbook for visit id={visit.pk}, project={visit.project}, row_count={inspections.count()}')
+    log_event(request.user, 'SITE_VISIT_EXPORT', request, f'Exported inspection workbook for visit id={visit.pk}, project={visit.project}, row_count={len(inspections)}')
     filename_project = ''.join(char if char.isalnum() or char in '-_' else '_' for char in visit.project)[:50] or 'Project'
     response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     response['Content-Disposition'] = f'attachment; filename="SIAC_Site_Inspection_{filename_project}_{visit.visit_date.isoformat()}.xlsx"'

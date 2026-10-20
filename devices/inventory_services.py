@@ -491,8 +491,24 @@ def import_inventory_workbook(uploaded_file, actor=None):
             )
 
         # Record detected custody/status changes across subsequent workbook imports.
+        # Fetch changed assets in one query and bulk-insert the audit events; the old
+        # per-change SELECT + INSERT pattern could exceed Gunicorn's request timeout.
+        changed_assets = {}
+        if import_changes:
+            changed_pairs = {(c['source_sheet'], c['source_row']) for c in import_changes}
+            changed_sheets = {sheet for sheet, _row in changed_pairs}
+            changed_rows = {row for _sheet, row in changed_pairs}
+            changed_assets = {
+                (asset.source_sheet, asset.source_row): asset
+                for asset in Asset.objects.filter(
+                    source_sheet__in=changed_sheets,
+                    source_row__in=changed_rows,
+                ).select_related('employee')
+            }
+
+        change_events = []
         for change in import_changes:
-            saved = Asset.objects.filter(source_sheet=change['source_sheet'], source_row=change['source_row']).select_related('employee').first()
+            saved = changed_assets.get((change['source_sheet'], change['source_row']))
             if not saved:
                 continue
             old_hr = (change['old_hr_code'] or '').strip().casefold()
@@ -518,7 +534,7 @@ def import_inventory_workbook(uploaded_file, actor=None):
                 to_employee, to_hr = saved.employee if saved.employee_id else None, saved.hr_code
                 to_name = saved.employee.name if saved.employee_id else saved.employee_name
             key = f"source-change:{change['source_sheet']}:{change['source_row']}:{uuid.uuid4().hex}"
-            AssetMovement.objects.create(
+            change_events.append(AssetMovement(
                 asset=saved, event_type=event_type, effective_date=timezone.localdate(),
                 from_employee=change['from_employee'], to_employee=to_employee,
                 from_hr_code=change['from_hr_code'] or '', from_employee_name=change['from_employee_name'] or '',
@@ -528,7 +544,9 @@ def import_inventory_workbook(uploaded_file, actor=None):
                 notes='تاريخ الحركة الأصلي غير موجود في الملف؛ التاريخ المسجل هنا هو تاريخ اكتشاف التغيير عند الاستيراد.',
                 source_sheet=change['source_sheet'], source_row=change['source_row'],
                 source_event_key=key, created_by=actor,
-            )
+            ))
+        if change_events:
+            AssetMovement.objects.bulk_create(change_events, batch_size=500)
 
         # Seed exactly one truthful baseline entry per imported row. These describe the
         # source's known state, not invented historical transfer dates.

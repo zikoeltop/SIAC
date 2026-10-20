@@ -10,8 +10,8 @@ class ExcelUploadForm(forms.Form):
         f = self.cleaned_data['excel_file']
         if not f.name.lower().endswith('.xlsx'):
             raise forms.ValidationError('يسمح بملفات XLSX فقط.')
-        if f.size > 25 * 1024 * 1024:
-            raise forms.ValidationError('حجم الملف يجب ألا يتجاوز 25 MB.')
+        if f.size > 100 * 1024 * 1024:
+            raise forms.ValidationError('حجم الملف يجب ألا يتجاوز 100 MB.')
         return f
 
 
@@ -25,8 +25,8 @@ class InventoryWorkbookImportForm(forms.Form):
         f = self.cleaned_data['workbook']
         if not f.name.lower().endswith('.xlsx'):
             raise forms.ValidationError('يسمح بملفات XLSX فقط.')
-        if f.size > 25 * 1024 * 1024:
-            raise forms.ValidationError('حجم الملف يجب ألا يتجاوز 25 MB.')
+        if f.size > 100 * 1024 * 1024:
+            raise forms.ValidationError('حجم الملف يجب ألا يتجاوز 100 MB.')
         return f
 
 

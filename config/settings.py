@@ -113,5 +113,5 @@ if not DEBUG:
     CSRF_COOKIE_SECURE = True
 
 # Allow administrators to upload the multi-sheet inventory workbook (typically ~2.5 MB).
-DATA_UPLOAD_MAX_MEMORY_SIZE = 25 * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
