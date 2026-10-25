@@ -175,7 +175,7 @@ class SiteVisitInspectionWorkflowTests(TestCase):
         self.other_project_asset.refresh_from_db()
         self.assertEqual(self.other_project_asset.project, 'Project Beta')
 
-    def test_snapshot_correction_requires_reason_and_never_updates_asset_table(self):
+    def test_snapshot_correction_does_not_require_reason_and_never_updates_asset_table(self):
         visit = SiteVisit.objects.create(
             project='Project Alpha', visit_date=date(2026, 10, 18),
             technician_name='IT Tech One', created_by=self.regular,
@@ -192,9 +192,10 @@ class SiteVisitInspectionWorkflowTests(TestCase):
             'comments': 'Checked at site',
         }
         response = self.client.post(url, base_data)
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 302)
         inspection.refresh_from_db()
-        self.assertEqual(inspection.user_name, 'Original User')
+        self.assertEqual(inspection.user_name, 'Observed User')
+        self.assertIn('(not provided)', inspection.auto_comments)
 
         base_data['reason_user_name'] = 'Employee name verified on site'
         for field in ('monitor_model', 'monitor_serial', 'printer_model', 'printer_serial'):
@@ -207,6 +208,39 @@ class SiteVisitInspectionWorkflowTests(TestCase):
         self.assertEqual(inspection.status, SiteInspection.Status.INSPECTED)
         self.computer.refresh_from_db()
         self.assertEqual(self.computer.employee_name, 'Original User')
+
+    def test_inspection_result_comments_and_reasons_are_optional_and_visit_can_close(self):
+        visit = SiteVisit.objects.create(
+            project='Project Alpha', visit_date=date(2026, 10, 18),
+            technician_name='IT Tech One', created_by=self.regular,
+        )
+        from .site_visits import _seed_project_assets
+        _seed_project_assets(visit)
+        inspection = SiteInspection.objects.get(visit=visit, asset=self.computer)
+        url = reverse('site_visit_detail', args=[visit.pk])
+        response = self.client.post(url, {
+            'action': 'save_inspection', 'inspection_id': inspection.pk,
+            'user_name': inspection.user_name,
+            'type_snapshot': inspection.type_snapshot,
+            'model_snapshot': inspection.model_snapshot,
+            'serial_number_snapshot': inspection.serial_number_snapshot,
+            'computer_name_snapshot': inspection.computer_name_snapshot,
+            'monitor_model': inspection.monitor_model,
+            'monitor_serial': inspection.monitor_serial,
+            'printer_model': inspection.printer_model,
+            'printer_serial': inspection.printer_serial,
+            'status': SiteInspection.Status.PENDING,
+            'comments': '',
+        })
+        self.assertEqual(response.status_code, 302)
+        inspection.refresh_from_db()
+        self.assertEqual(inspection.status, SiteInspection.Status.PENDING)
+        self.assertEqual(inspection.comments, '')
+
+        response = self.client.post(url, {'action': 'complete_visit'})
+        self.assertEqual(response.status_code, 302)
+        visit.refresh_from_db()
+        self.assertEqual(visit.status, SiteVisit.Status.COMPLETED)
 
     def test_additional_inspection_does_not_inflate_source_project_coverage(self):
         from .site_visits import _project_dashboard_context, site_visit_global_metrics

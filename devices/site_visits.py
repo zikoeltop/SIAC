@@ -629,15 +629,12 @@ def site_visit_detail(request, pk):
 
         if action == 'complete_visit':
             _seed_project_assets(visit)
-            pending_count = visit.inspections.filter(status=SiteInspection.Status.PENDING).count()
-            if pending_count:
-                messages.error(request, f'لا يمكن اعتماد الزيارة: ما زال هناك {pending_count} جهازًا لم تُسجّل له نتيجة فحص أو تعذّر فحص.')
-            else:
-                visit.status = SiteVisit.Status.COMPLETED
-                visit.completed_at = timezone.now()
-                visit.save(update_fields=['status', 'completed_at'])
-                log_event(request.user, 'SITE_VISIT_COMPLETE', request, f'Completed site visit id={visit.pk}, project={visit.project}, rows={visit.inspections.count()}')
-                messages.success(request, 'تم اعتماد الزيارة وإغلاقها بنجاح.')
+            # Inspection results and comments are optional; allow closing with pending rows.
+            visit.status = SiteVisit.Status.COMPLETED
+            visit.completed_at = timezone.now()
+            visit.save(update_fields=['status', 'completed_at'])
+            log_event(request.user, 'SITE_VISIT_COMPLETE', request, f'Completed site visit id={visit.pk}, project={visit.project}, rows={visit.inspections.count()}')
+            messages.success(request, 'تم اعتماد الزيارة وإغلاقها بنجاح. يمكن ترك نتائج الفحص والملاحظات فارغة.')
             return redirect('site_visit_detail', pk=visit.pk)
 
         if action == 'save_inspection':
@@ -654,21 +651,8 @@ def site_visit_detail(request, pk):
                     error_list.append(f'{label}: الحد الأقصى {field_limits.get(field, 255)} حرفًا.')
                 if values[field] != (getattr(inspection, field) or ''):
                     changed[field] = values[field]
-                    if not reasons[field]:
-                        error_list.append(f'اكتب سبب التعديل في {label}.')
             if new_status not in dict(SiteInspection.Status.choices):
                 error_list.append('حالة الفحص غير صحيحة.')
-            if inspection.status != SiteInspection.Status.PENDING and new_status == SiteInspection.Status.PENDING:
-                error_list.append('لا يمكن إعادة فحص مكتمل إلى «لم يتم الفحص». سجّل النتيجة الصحيحة أو تعذر الفحص مع توضيح السبب.')
-            if new_status == SiteInspection.Status.UNABLE and not comments:
-                error_list.append('اكتب سبب تعذر الفحص في COMMENTS.')
-            if new_status == SiteInspection.Status.NEEDS_ATTENTION and not comments:
-                error_list.append('اكتب الملاحظة أو سبب المتابعة في COMMENTS لهذه الحالة.')
-            if new_status == SiteInspection.Status.PENDING:
-                if comments or changed:
-                    error_list.append('حدد نتيجة الفحص أو تعذر الفحص قبل حفظ الملاحظات والتعديلات.')
-                else:
-                    error_list.append('اختَر نتيجة الفحص قبل الحفظ: سليم، يحتاج متابعة، أو تعذر الفحص.')
             if len(comments) > 10000:
                 error_list.append('الملاحظات أطول من الحد المسموح (10000 حرف).')
             if error_list:
@@ -684,7 +668,7 @@ def site_visit_detail(request, pk):
                 old_value = getattr(inspection, field) or ''
                 reason = reasons[field]
                 auto_entries.append(
-                    f'[AUTO {effective_day}] {label} changed from "{old_value or "(blank)"}" to "{new_value or "(blank)"}". Reason: {reason}'
+                    f'[AUTO {effective_day}] {label} changed from "{old_value or "(blank)"}" to "{new_value or "(blank)"}". Reason: {reason or '(not provided)'}'
                 )
             with transaction.atomic():
                 locked = SiteInspection.objects.select_for_update().get(pk=inspection.pk)
@@ -716,7 +700,7 @@ def site_visit_detail(request, pk):
                 locked.save()
             change_desc = f'Updated inspection id={inspection.pk}, visit id={visit.pk}, asset id={inspection.asset_id}, status={new_status}, changed_fields={",".join(changed.keys()) or "none"}'
             log_event(request.user, 'SITE_INSPECTION_UPDATE', request, change_desc)
-            messages.success(request, 'تم حفظ نتيجة الفحص. كل تعديل وسببه محفوظان داخل COMMENTS، ولم يتم تعديل بيانات SIAC الأساسية.')
+            messages.success(request, 'تم حفظ بيانات الفحص. سبب التعديل والنتيجة والملاحظات اختيارية، ولم يتم تعديل بيانات SIAC الأساسية.')
             return redirect('site_visit_detail', pk=visit.pk)
 
         messages.error(request, 'الإجراء المطلوب غير معروف.')

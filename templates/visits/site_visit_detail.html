@@ -48,7 +48,7 @@
 {% endif %}
 
 <div class="card inspection-card">
-  <div class="section-heading"><div><h2>قائمة الفحص الدوري</h2><p>كل جهاز يجب أن تكون له نتيجة «سليم» أو «يحتاج متابعة» أو «تعذر الفحص» قبل اعتماد الزيارة. سبب التعذر يُكتب في COMMENTS.</p></div><span class="type-pill">{{ inspection_count }} سجل فحص</span></div>
+  <div class="section-heading"><div><h2>قائمة الفحص الدوري</h2><p>يمكن حفظ بيانات الجهاز دون تحديد نتيجة الفحص أو كتابة ملاحظات أو أسباب للتعديلات؛ كل هذه الحقول اختيارية. سبب التعذر يُكتب في COMMENTS.</p></div><span class="type-pill">{{ inspection_count }} سجل فحص</span></div>
   <div class="inspection-table-note">استخدم الحقول القابلة للتعديل لتسجيل القيمة التي اكتشفها الفني في الموقع. إذا تغيّرت قيمة، اكتب سبب التغيير في حقل السبب المقابل؛ سيضيف النظام ملاحظة تلقائية إلى COMMENTS، مع الاحتفاظ بقيمة SIAC الأصلية دون تعديلها.</div>
   <div class="table-wrap inspection-table-wrap"><table class="inspection-table"><thead><tr><th>Project / Visit</th><th>USER NAME</th><th>TYPE</th><th>MODEL</th><th>SERIAL NUMBER</th><th>COMPUTER NAME</th><th>Monitor Model</th><th>Monitor Serial</th><th>printer model</th><th>printer serial</th><th>نتيجة الفحص</th><th>COMMENTS / حفظ</th></tr></thead><tbody>
   {% for row in inspections %}
@@ -85,8 +85,8 @@
 </div>
 
 <div class="card visit-finish-card">
-  <div class="section-heading"><div><h2>اعتماد الزيارة</h2><p>تُغلق الزيارة بعد تسجيل نتيجة لكل جهاز في القائمة. «تعذر الفحص» يحتاج إلى سبب في COMMENTS، ولا يُحسب كفحص مكتمل.</p></div></div>
+  <div class="section-heading"><div><h2>اعتماد الزيارة</h2><p>يمكن اعتماد وإغلاق الزيارة حتى لو لم تُسجّل نتيجة فحص لبعض الأجهزة.</p></div></div>
   {% if visit.status == 'completed' %}<div class="msg success">هذه الزيارة مكتملة ومقفولة{% if visit.completed_at %} بتاريخ {{ visit.completed_at|date:'d/m/Y H:i' }}{% endif %}. للتوثيق الجديد، أنشئ زيارة أخرى.</div>
-  {% elif visit.status == 'in_progress' %}<form method="post" class="finish-visit-form">{% csrf_token %}<input type="hidden" name="action" value="complete_visit"><button class="button" type="submit">اعتماد وإغلاق الزيارة</button>{% if pending_count %}<span class="form-hint">متبقي {{ pending_count }} جهاز لم تُسجّل له نتيجة؛ لن يتم الإغلاق قبل إكمالها.</span>{% else %}<span class="form-hint">كل الأجهزة لها نتيجة، ويمكن إغلاق الزيارة.</span>{% endif %}</form>{% endif %}
+  {% elif visit.status == 'in_progress' %}<form method="post" class="finish-visit-form">{% csrf_token %}<input type="hidden" name="action" value="complete_visit"><button class="button" type="submit">اعتماد وإغلاق الزيارة</button><span class="form-hint">نتائج الفحص والملاحظات وأسباب التعديلات اختيارية.</span></form>{% endif %}
 </div>
 {% endblock %}
