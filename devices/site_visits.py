@@ -422,7 +422,7 @@ def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=No
         'posted_row_id': posted_row_id,
         'posted_row_data': posted_row_data or {},
         'form_error': form_error,
-        'inspection_status_choices': SiteInspection.Status.choices,
+        'inspection_status_choices': ((SiteInspection.Status.INSPECTED, 'تم الفحص'), (SiteInspection.Status.PENDING, 'لم يتم الفحص')),
         'project_names': _project_names(),
         'inspection_count': len(inspections),
         'inspected_count': sum(1 for row in inspections if row.status in SUCCESS_STATUSES),
