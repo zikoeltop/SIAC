@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('devices', '0012_siteinspection_peripherals_snapshot'),
+        ('devices', '0010_simplify_site_inspection_statuses'),
     ]
 
     operations = [
