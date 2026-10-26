@@ -298,9 +298,11 @@ class SiteInspection(models.Model):
 
     class Status(models.TextChoices):
         PENDING = 'pending', 'لم يتم الفحص'
-        INSPECTED = 'inspected', 'تم الفحص - سليم'
-        NEEDS_ATTENTION = 'needs_attention', 'تم الفحص - يحتاج متابعة'
-        UNABLE = 'unable', 'تعذر الفحص'
+        INSPECTED = 'inspected', 'تم الفحص'
+        # Legacy constants retained for dashboard/report compatibility; migration
+        # normalizes existing rows to the two supported statuses.
+        NEEDS_ATTENTION = 'needs_attention', 'تم الفحص'
+        UNABLE = 'unable', 'لم يتم الفحص'
 
     visit = models.ForeignKey(SiteVisit, on_delete=models.CASCADE, related_name='inspections')
     asset = models.ForeignKey(Asset, on_delete=models.PROTECT, related_name='site_inspections')
@@ -326,7 +328,7 @@ class SiteInspection(models.Model):
     # Retained for compatibility with migration history and existing databases.
     peripherals_snapshot = models.JSONField(default=list, blank=True)
 
-    status = models.CharField(max_length=24, choices=Status.choices, default=Status.PENDING, db_index=True)
+    status = models.CharField(max_length=24, choices=[(Status.PENDING, 'لم يتم الفحص'), (Status.INSPECTED, 'تم الفحص')], default=Status.PENDING, db_index=True)
     comments = models.TextField(blank=True, verbose_name='Technician Comments')
     auto_comments = models.TextField(blank=True, verbose_name='Automatic Change Comments')
     inspected_by = models.ForeignKey(

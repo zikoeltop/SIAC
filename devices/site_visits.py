@@ -141,15 +141,11 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
     code = (asset.hr_code or '').strip().casefold()
     empty = {'monitors': [], 'printers': []}
     matching = empty
-    if asset.asset_type == Asset.Types.COMPUTER:
-        by_employee = peripherals.get('by_employee', {}).get(asset.employee_id, empty) if asset.employee_id else empty
-        by_code = peripherals.get('by_code', {}).get(code, empty) if code and code != 'consaltant' else empty
-        matching = {
-            'monitors': by_employee.get('monitors') or by_code.get('monitors', []),
-            'printers': by_employee.get('printers') or by_code.get('printers', []),
-        }
-    monitors = matching.get('monitors', [])
-    printers = matching.get('printers', [])
+    # Every physical asset gets its own inspection row. Peripheral information is
+    # no longer copied onto the computer row, so each monitor/printer has an
+    # independent inspection result and edit history.
+    monitors = []
+    printers = []
     monitor_models = _join_unique([(item.model or item.brand or item.item_type) for item in monitors])
     monitor_serials = _join_unique([item.serial_number for item in monitors])
     printer_models = _join_unique([(item.model or item.brand or item.item_type) for item in printers])
@@ -172,24 +168,9 @@ def _snapshot_defaults(asset, visit, is_additional=False, peripherals=None):
 
 
 def _visible_inspection_rows(queryset):
-    """Hide a monitor/printer row when its peripheral is represented on a computer row.
+    """Show every asset as an independent inspection row, including peripherals."""
+    return list(queryset.select_related('asset', 'asset__employee'))
 
-    Match by employee FK first. Fall back to HR Code only when it is a real code,
-    never the shared 'Consaltant' category marker.
-    """
-    rows = list(queryset.select_related('asset', 'asset__employee'))
-    computer_employee_ids = {r.asset.employee_id for r in rows
-                             if r.asset_id and r.asset.asset_type == Asset.Types.COMPUTER and r.asset.employee_id}
-    computer_codes = {(r.asset.hr_code or '').strip().casefold() for r in rows
-                      if r.asset_id and r.asset.asset_type == Asset.Types.COMPUTER
-                      and (r.asset.hr_code or '').strip()
-                      and (r.asset.hr_code or '').strip().casefold() != 'consaltant'}
-    return [r for r in rows if not (
-        r.asset_id and r.asset.asset_type in (Asset.Types.MONITOR, Asset.Types.PRINTER)
-        and ((r.asset.employee_id and r.asset.employee_id in computer_employee_ids)
-             or ((r.asset.hr_code or '').strip().casefold() in computer_codes
-                 and (r.asset.hr_code or '').strip().casefold() != 'consaltant'))
-    )]
 
 def _seed_project_assets(visit):
     """Ensure every current physical asset in the project's scope has a checklist row."""
@@ -204,6 +185,26 @@ def _seed_project_assets(visit):
     ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id'))
     known_ids = {asset.pk for asset in assets}
     assets.extend(asset for asset in consultant_assets if asset.pk not in known_ids)
+    # Include monitors/printers sharing the same real HR Code as project computers,
+    # even when the peripheral's project field is blank or stale. Never join on the
+    # shared consultant marker because it is not an employee identifier.
+    computer_codes = {
+        (asset.hr_code or '').strip() for asset in assets
+        if asset.asset_type == Asset.Types.COMPUTER
+        and (asset.hr_code or '').strip()
+        and (asset.hr_code or '').strip().casefold() != 'consaltant'
+    }
+    if computer_codes:
+        code_filter = Q()
+        for code in computer_codes:
+            code_filter |= Q(hr_code__iexact=code)
+        linked = Asset.objects.filter(
+            asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER],
+        ).filter(code_filter).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
+        for peripheral in linked:
+            if peripheral.pk not in known_ids:
+                assets.append(peripheral)
+                known_ids.add(peripheral.pk)
     if not assets:
         return 0
     existing = set(visit.inspections.values_list('asset_id', flat=True))
@@ -406,8 +407,7 @@ def _visit_detail_context(request, visit, posted_row_id=None, posted_row_data=No
         already_added_ids = visit.inspections.values_list('asset_id', flat=True)
         results = _inspectable_assets().select_related('employee').filter(
             Q(serial_number__icontains=q) | Q(computer_name__icontains=q) |
-            Q(computer_name_new__icontains=q) | Q(model__icontains=q) |
-            Q(item_type__icontains=q) | Q(employee_name__icontains=q) | Q(hr_code__icontains=q)
+            Q(computer_name_new__icontains=q)
         ).order_by('project', 'asset_type', 'serial_number', 'id')
         search_page = Paginator(results, 25).get_page(request.GET.get('search_page'))
         already_ids = set(already_added_ids)
@@ -620,6 +620,16 @@ def site_visit_detail(request, pk):
                 try:
                     with transaction.atomic():
                         _create_additional_inspection(visit, asset)
+                        hr_code = (asset.hr_code or '').strip()
+                        if asset.asset_type == Asset.Types.COMPUTER and hr_code and hr_code.casefold() != 'consaltant':
+                            linked_peripherals = _inspectable_assets().filter(
+                                asset_type__in=[Asset.Types.MONITOR, Asset.Types.PRINTER],
+                                hr_code__iexact=hr_code,
+                            ).exclude(asset_status__in=EXCLUDED_STATUSES).select_related('employee').order_by('id')
+                            existing_ids = set(visit.inspections.values_list('asset_id', flat=True))
+                            for peripheral in linked_peripherals:
+                                if peripheral.pk not in existing_ids:
+                                    _create_additional_inspection(visit, peripheral)
                 except IntegrityError:
                     messages.info(request, 'الجهاز أُضيف بالفعل إلى الزيارة من جلسة أخرى.')
                 else:

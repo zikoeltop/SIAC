@@ -30,14 +30,14 @@
   <div class="stat-card"><span class="stat-label">الأجهزة في القائمة</span><strong>{{ inspection_count }}</strong></div>
   <div class="stat-card"><span class="stat-label">تم فحصها</span><strong>{{ inspected_count }}</strong></div>
   <div class="stat-card"><span class="stat-label">لم تسجل نتيجة</span><strong>{{ pending_count }}</strong></div>
-  <div class="stat-card"><span class="stat-label">تعذر فحصها</span><strong>{{ unable_count }}</strong></div>
+  <div class="stat-card"><span class="stat-label">سجلات لم يتم فحصها</span><strong>{{ unable_count }}</strong></div>
 </div>
 
 {% if visit.status == 'in_progress' %}
 <div class="card">
-  <div class="section-heading"><div><h2>إضافة جهاز من كل سجلات SIAC</h2><p>ابحث بالسيريال نمبر أو اسم الكمبيوتر أو الموديل. الأجهزة غير المسجلة على المشروع تظهر كأجهزة إضافية دون تعديل مشروعها في SIAC.</p></div></div>
+  <div class="section-heading"><div><h2>إضافة جهاز من كل سجلات SIAC</h2><p>ابحث باستخدام Serial Number أو Computer Name فقط. الأجهزة غير المسجلة على المشروع تظهر كأجهزة إضافية دون تعديل مشروعها في SIAC.</p></div></div>
   <form method="get" class="filter-form">
-    <input name="q" value="{{ q }}" placeholder="Serial Number أو Computer Name أو Model" required>
+    <input name="q" value="{{ q }}" placeholder="Serial Number أو Computer Name" required>
     <button class="button" type="submit">بحث عن جهاز</button>
     {% if q %}<a class="button ghost" href="{% url 'site_visit_detail' visit.pk %}">مسح البحث</a>{% endif %}
   </form>
@@ -48,8 +48,8 @@
 {% endif %}
 
 <div class="card inspection-card">
-  <div class="section-heading"><div><h2>قائمة الفحص الدوري</h2><p>يمكن حفظ بيانات الجهاز دون تحديد نتيجة الفحص أو كتابة ملاحظات أو أسباب للتعديلات؛ كل هذه الحقول اختيارية. سبب التعذر يُكتب في COMMENTS.</p></div><span class="type-pill">{{ inspection_count }} سجل فحص</span></div>
-  <div class="inspection-table-note">استخدم الحقول القابلة للتعديل لتسجيل القيمة التي اكتشفها الفني في الموقع. إذا تغيّرت قيمة، اكتب سبب التغيير في حقل السبب المقابل؛ سيضيف النظام ملاحظة تلقائية إلى COMMENTS، مع الاحتفاظ بقيمة SIAC الأصلية دون تعديلها.</div>
+  <div class="section-heading"><div><h2>قائمة الفحص الدوري — كل جهاز وملحق بسجل مستقل</h2><p>يمكن حفظ بيانات الجهاز دون تحديد نتيجة الفحص أو كتابة ملاحظات أو أسباب للتعديلات؛ كل هذه الحقول اختيارية.</p></div><span class="type-pill">{{ inspection_count }} سجل فحص</span></div>
+  <div class="inspection-table-note">كل كمبيوتر أو شاشة أو طابعة يظهر كسجل مستقل، ويرتبط الملحق بالكمبيوتر باستخدام HR Code. أسباب التعديل اختيارية، والتغييرات تُحفظ في سجل الزيارة فقط دون تعديل بيانات SIAC الأصلية.</div>
   <div class="table-wrap inspection-table-wrap"><table class="inspection-table"><thead><tr><th>Project / Visit</th><th>USER NAME</th><th>TYPE</th><th>MODEL</th><th>SERIAL NUMBER</th><th>COMPUTER NAME</th><th>Monitor Model</th><th>Monitor Serial</th><th>printer model</th><th>printer serial</th><th>نتيجة الفحص</th><th>COMMENTS / حفظ</th></tr></thead><tbody>
   {% for row in inspections %}
     <tr class="{% if row.is_additional %}additional-inspection-row{% endif %}">
