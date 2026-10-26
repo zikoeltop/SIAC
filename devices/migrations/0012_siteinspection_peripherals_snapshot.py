@@ -2,10 +2,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    dependencies = [
-        ('devices', '0011_merge_0010_leaves'),
-        ('devices', '0010_simplify_site_inspection_statuses'),
-    ]
+    dependencies = [('devices', '0011_merge_0010_leaves')]
     operations = [
         migrations.AddField(
             model_name='siteinspection',
