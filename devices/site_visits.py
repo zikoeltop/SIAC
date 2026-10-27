@@ -671,14 +671,16 @@ def site_visit_detail(request, pk):
                     form_error=' '.join(error_list))
                 return render(request, 'visits/site_visit_detail.html', context, status=400)
 
-            auto_entries = []
+            change_entries = []
             effective_day = timezone.localdate().isoformat()
+            actor_name = (request.user.get_full_name() or '').strip() or getattr(request.user, 'username', '') or str(request.user)
             for field, new_value in changed.items():
                 label, _reason_label = EDITABLE_SNAPSHOT_FIELDS[field]
                 old_value = getattr(inspection, field) or ''
                 reason = reasons[field]
-                auto_entries.append(
-                    f'[AUTO {effective_day}] {label} changed from "{old_value or "(blank)"}" to "{new_value or "(blank)"}". Reason: {reason or '(not provided)'}'
+                reason_text = f' Reason: {reason}' if reason else ''
+                change_entries.append(
+                    f'[{effective_day}] المستخدم: {actor_name} — {label} changed from "{old_value or "(blank)"}" to "{new_value or "(blank)"}".{reason_text}'
                 )
             with transaction.atomic():
                 locked = SiteInspection.objects.select_for_update().get(pk=inspection.pk)
@@ -699,8 +701,8 @@ def site_visit_detail(request, pk):
                     setattr(locked, field, value)
                 locked.comments = comments
                 locked.status = new_status
-                if auto_entries:
-                    locked.auto_comments = '\n'.join(part for part in [locked.auto_comments.strip(), *auto_entries] if part)
+                if change_entries:
+                    locked.auto_comments = '\n'.join(part for part in [locked.auto_comments.strip(), *change_entries] if part)
                 if new_status == SiteInspection.Status.PENDING:
                     locked.inspected_by = None
                     locked.inspected_at = None
