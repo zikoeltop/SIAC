@@ -9,7 +9,7 @@ def normalize_statuses(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [('devices', '0009_sitevisit_cancelled_status')]
+    dependencies = [('devices', '0012_siteinspection_peripherals_snapshot')]
 
     operations = [
         migrations.RunPython(normalize_statuses, migrations.RunPython.noop),
